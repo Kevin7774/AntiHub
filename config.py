@@ -206,7 +206,7 @@ STARTUP_BOOTSTRAP_ENABLED = str(_get("STARTUP_BOOTSTRAP_ENABLED", "true")).lower
     "yes",
 }
 PAYMENT_WEBHOOK_SECRET = str(_get("PAYMENT_WEBHOOK_SECRET", "")).strip()
-PAYMENT_PROVIDER = str(_get("PAYMENT_PROVIDER", "mock")).strip().lower() or "mock"
+PAYMENT_PROVIDER = str(_get_env_value(("PAYMENT_PROVIDER", "PAY_PROVIDER")) or _get("PAYMENT_PROVIDER", "mock")).strip().lower() or "mock"
 WECHATPAY_API_BASE_URL = str(_get("WECHATPAY_API_BASE_URL", "https://api.mch.weixin.qq.com")).strip().rstrip("/")
 WECHATPAY_NOTIFY_URL = str(_get("WECHATPAY_NOTIFY_URL", "")).strip()
 WECHATPAY_MCHID = str(_get("WECHATPAY_MCHID", "")).strip()
@@ -238,7 +238,7 @@ MERMAID_INSTALL_TIMEOUT_SECONDS = int(_get("MERMAID_INSTALL_TIMEOUT_SECONDS", "6
 ANALYZE_LOCK_PREFIX = _get("ANALYZE_LOCK_PREFIX", "analyze_lock:")
 OPENAI_API_KEY = str(_get("OPENAI_API_KEY", "")).strip()
 OPENAI_BASE_URL = str(_get("OPENAI_BASE_URL", "https://api.openai.com/v1")).strip()
-OPENAI_API_MODEL = str(_get("OPENAI_API_MODEL", "gpt-4o-mini")).strip()
+OPENAI_API_MODEL = str(_get_env_value(("OPENAI_API_MODEL", "OPENAI_MODEL")) or _get("OPENAI_API_MODEL", "gpt-4o-mini")).strip()
 MINIMAX_API_KEY = str(_get("MINIMAX_API_KEY", "")).strip()
 MINIMAX_BASE_URL = str(_get("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")).strip()
 MINIMAX_MODEL = str(_get("MINIMAX_MODEL", "MiniMax-M2.5")).strip()
