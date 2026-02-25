@@ -18,6 +18,7 @@ if str(ROOT_DIR) not in sys.path:
 from auth import hash_password_bcrypt
 from billing import BillingRepository, session_scope
 from billing.models import Base as BillingBase
+from billing.seed import seed_default_plans
 from config import DATABASE_URL
 from decision.models import DecisionBase
 from decision.service import seed_default_catalog
@@ -167,6 +168,17 @@ def main() -> int:
 
     _bootstrap_root_user()
     _bootstrap_admin_user()
+    try:
+        result = seed_default_plans()
+        print(
+            "[init-prod-db] billing plans ensured: "
+            f"plans_created={result['plans_created']} "
+            f"plans_updated={result['plans_updated']} "
+            f"entitlements_created={result['entitlements_created']} "
+            f"entitlements_updated={result['entitlements_updated']}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[init-prod-db] billing seed skipped: {exc}")
     seed_default_catalog()
     print("[init-prod-db] default catalog ensured")
     print("[init-prod-db] initialization completed")
