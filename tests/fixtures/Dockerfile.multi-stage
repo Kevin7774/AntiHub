@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM python:alpine AS base
+RUN echo base
+
+FROM --platform=$BUILDPLATFORM node:18-alpine AS app-base
+RUN echo app
+
+FROM app-base AS test
+RUN echo test
+
+FROM --platform=$BUILDPLATFORM base AS dev
+RUN echo dev
+
+FROM --platform=$TARGETPLATFORM nginx:alpine

@@ -1,0 +1,118 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: antihub/api:prod
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      APP_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      STARTUP_BOOTSTRAP_ENABLED: "false"
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://antihub:change_me@db:5432/antihub}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_DISABLED: "false"
+      CASE_STORE_BACKEND: ${CASE_STORE_BACKEND:-database}
+      CASE_STORE_DATABASE_URL: ${CASE_STORE_DATABASE_URL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"
+    volumes:
+      - ./.antihub:/app/.antihub
+      - ./logs:/app/logs
+    command: >
+      sh -c "python scripts/init_prod_db.py &&
+      exec gunicorn -k uvicorn.workers.UvicornWorker
+      -w ${GUNICORN_WORKERS:-4}
+      -b 0.0.0.0:8000
+      --timeout ${GUNICORN_TIMEOUT:-120}
+      main:app"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    networks:
+      - antihub_internal
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.prod
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    image: antihub/frontend:prod
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - antihub_internal
+
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-antihub}
+      POSTGRES_USER: ${POSTGRES_USER:-antihub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-antihub} -d ${POSTGRES_DB:-antihub}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - antihub_internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    networks:
+      - antihub_internal
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    env_file:
+      - .env.prod
+    command: tunnel --no-autoupdate run
+    depends_on:
+      frontend:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks:
+      - antihub_internal
+
+networks:
+  antihub_internal:
+    driver: bridge

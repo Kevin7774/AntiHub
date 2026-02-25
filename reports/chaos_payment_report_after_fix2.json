@@ -1,0 +1,1355 @@
+{
+  "meta": {
+    "llm_used": false,
+    "webhook_url": "http://127.0.0.1:8010/billing/webhooks/payment",
+    "count": 50,
+    "concurrency": 8,
+    "minimax_model": "MiniMax-M2.1"
+  },
+  "cases": [
+    {
+      "case_id": "fallback_happy_path_000",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_000",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_0",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0000",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_happy_path_001",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_001",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_1",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0001",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_happy_path_002",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_002",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_2",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0002",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_happy_path_003",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_003",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_3",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0003",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_happy_path_004",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_004",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_4",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0004",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_happy_path_005",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_005",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_5",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0005",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_happy_path_006",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_006",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_6",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0006",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_happy_path_007",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_007",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_0",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0007",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_happy_path_008",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_008",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_1",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0008",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_happy_path_009",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "note": "baseline valid case",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_009",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_2",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0009",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_010",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_010",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_3",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0010",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_011",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_011",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_4",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0011",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_012",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_012",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_5",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0012",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_013",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_013",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_6",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0013",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_014",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_014",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_0",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0014",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_015",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_015",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_1",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0015",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_016",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_016",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_2",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0016",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_017",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_017",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_3",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0017",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_018",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_018",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_4",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0018",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_signature_019",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "note": "valid payload with intentionally invalid signature",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_019",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_5",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0019",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_020",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: event_id",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_6",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0020",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_021",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: user_id",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_021",
+        "provider": "chaos-gateway",
+        "data": {
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0021",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_022",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: event_id",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_1",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0022",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_023",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: plan_code",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_023",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_2",
+          "external_order_id": "ord_0023",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_024",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: event_id",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_3",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0024",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_025",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: event_id",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_4",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0025",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_026",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: plan_code",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_026",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_5",
+          "external_order_id": "ord_0026",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_027",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: user_id",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_027",
+        "provider": "chaos-gateway",
+        "data": {
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0027",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_028",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: plan_code",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_028",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_0",
+          "external_order_id": "ord_0028",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_missing_fields_029",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "note": "missing required field: user_id",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_029",
+        "provider": "chaos-gateway",
+        "data": {
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0029",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_030",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_030",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_2",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0030",
+          "amount_cents": null,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_031",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_031",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_3",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0031",
+          "amount_cents": "NaN",
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_032",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_032",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_4",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0032",
+          "amount_cents": -1,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_033",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_033",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_5",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0033",
+          "amount_cents": "100.00",
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_034",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_034",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_6",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0034",
+          "amount_cents": "NaN",
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_035",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_035",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_0",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0035",
+          "amount_cents": {
+            "raw": 100
+          },
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_036",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_036",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_1",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0036",
+          "amount_cents": "NaN",
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_037",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_037",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_2",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0037",
+          "amount_cents": null,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_038",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_038",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_3",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0038",
+          "amount_cents": "100.00",
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_bad_amount_format_039",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "note": "invalid amount_cents format",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_039",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_4",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_0039",
+          "amount_cents": -1,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_040",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_000",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_5",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_000",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_041",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_000",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_6",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_000",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_042",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_001",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_0",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_001",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_043",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_001",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_1",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_001",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_044",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_002",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_2",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_002",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_045",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_002",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_3",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_002",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_046",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_003",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_4",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_003",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_047",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_003",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_5",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_003",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_048",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_004",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_6",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_004",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    },
+    {
+      "case_id": "fallback_duplicate_order_049",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "note": "fully duplicated order/event pair",
+      "payload": {
+        "event_type": "payment.succeeded",
+        "event_id": "evt_dup_004",
+        "provider": "chaos-gateway",
+        "data": {
+          "user_id": "user_0",
+          "plan_code": "pro_chaos",
+          "external_order_id": "ord_dup_004",
+          "amount_cents": 9900,
+          "currency": "usd",
+          "duration_days": 30
+        }
+      }
+    }
+  ],
+  "results": [
+    {
+      "case_id": "fallback_happy_path_000",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 83,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_000\",\"order_id\":\"76eb1568-0bea-4566-a1e6-0ced92be40f1\",\"subscription_id\":\"06f966a9-5b62-486b-ad62-f84fb6fe0b2c\",\"point_flow_id\":\"9c82d567-cff3-453d-9b4a-832f0f7867f9\"}"
+    },
+    {
+      "case_id": "fallback_happy_path_001",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 48,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_001\",\"order_id\":\"34d15f3a-3bac-4926-81ab-c3d954025787\",\"subscription_id\":\"e52c3b8c-0b91-4a62-966d-96931d3ee980\",\"point_flow_id\":\"53cbb64e-1a78-4041-9f88-7dcd04ec1693\"}"
+    },
+    {
+      "case_id": "fallback_happy_path_002",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 76,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_002\",\"order_id\":\"771c1963-4397-4c4d-999e-70d94ee9815d\",\"subscription_id\":\"261c6764-631d-476c-83b8-fd03a43b0f5a\",\"point_flow_id\":\"9b827e0c-d46c-4bc3-bd6f-9f829d612551\"}"
+    },
+    {
+      "case_id": "fallback_happy_path_003",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 77,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_003\",\"order_id\":\"d7d5145d-868c-4a84-876f-5fad8f58578f\",\"subscription_id\":\"968ed09a-2014-4541-8b4b-4178d79b64e0\",\"point_flow_id\":\"2143d245-806d-4d45-9330-14fa1304c6b4\"}"
+    },
+    {
+      "case_id": "fallback_happy_path_004",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 75,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_004\",\"order_id\":\"7a2aa508-ac9e-4390-9a23-1afdf6ad4f5c\",\"subscription_id\":\"dfb022e3-c405-46f3-91c6-510deab16eb2\",\"point_flow_id\":\"e1429ea2-296b-4b3b-a4e3-0f5edbcde9e5\"}"
+    },
+    {
+      "case_id": "fallback_happy_path_005",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 75,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_005\",\"order_id\":\"966c0c03-dccb-4f9c-bb57-a4e4a0a1b158\",\"subscription_id\":\"5f1a5c4d-3e74-4d23-b931-ba35d51299ed\",\"point_flow_id\":\"2e531b80-ac64-4c36-ab0a-8ad9093314bf\"}"
+    },
+    {
+      "case_id": "fallback_happy_path_006",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 76,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_006\",\"order_id\":\"9639c685-253b-4a01-8bd4-0c17adcf26b8\",\"subscription_id\":\"c2e3babe-8fc0-4832-b319-c68b475afe4a\",\"point_flow_id\":\"8b05dea4-8406-4347-afd6-dc3f98036ec0\"}"
+    },
+    {
+      "case_id": "fallback_happy_path_007",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 75,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_007\",\"order_id\":\"4faf02ea-d8f5-4511-80e0-1fec3d8e8cab\",\"subscription_id\":\"06f966a9-5b62-486b-ad62-f84fb6fe0b2c\",\"point_flow_id\":\"eba1be3e-0efb-411a-bbaf-4c5fdac994b2\"}"
+    },
+    {
+      "case_id": "fallback_happy_path_008",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 40,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_008\",\"order_id\":\"4bebf87c-310f-450b-b3d0-02004c536449\",\"subscription_id\":\"e52c3b8c-0b91-4a62-966d-96931d3ee980\",\"point_flow_id\":\"0031c49f-0fcf-47a4-8a60-ca0e63b4f82b\"}"
+    },
+    {
+      "case_id": "fallback_happy_path_009",
+      "category": "happy_path",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 22,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_009\",\"order_id\":\"705f4ca9-f72e-489d-8b02-c21ccf529a18\",\"subscription_id\":\"261c6764-631d-476c-83b8-fd03a43b0f5a\",\"point_flow_id\":\"d396584a-2df9-4838-9727-f76d76a4bf7f\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_010",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 22,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_011",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 20,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_012",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 19,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_013",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 21,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_014",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 18,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_015",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 18,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_016",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 13,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_017",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 8,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_018",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 9,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_bad_signature_019",
+      "category": "bad_signature",
+      "signature_mode": "invalid",
+      "status_code": 401,
+      "latency_ms": 7,
+      "response": "{\"detail\":\"invalid webhook signature\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_020",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 10,
+      "response": "{\"detail\":\"event_id is required\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_021",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 10,
+      "response": "{\"detail\":\"user_id is required\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_022",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 5,
+      "response": "{\"detail\":\"event_id is required\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_023",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 9,
+      "response": "{\"detail\":\"plan_code is required\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_024",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 7,
+      "response": "{\"detail\":\"event_id is required\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_025",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 5,
+      "response": "{\"detail\":\"event_id is required\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_026",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 6,
+      "response": "{\"detail\":\"plan_code is required\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_027",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 40,
+      "response": "{\"detail\":\"user_id is required\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_028",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 5,
+      "response": "{\"detail\":\"plan_code is required\"}"
+    },
+    {
+      "case_id": "fallback_missing_fields_029",
+      "category": "missing_fields",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 39,
+      "response": "{\"detail\":\"user_id is required\"}"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_030",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 32,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_030\",\"order_id\":\"c28a60e0-c608-4121-9092-0ba88309787f\",\"subscription_id\":\"261c6764-631d-476c-83b8-fd03a43b0f5a\",\"point_flow_id\":\"8111e072-dc1a-4a9b-ad3b-334157790b95\"}"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_031",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 35,
+      "response": "{\"detail\":\"amount_cents must be an integer\"}"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_032",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 32,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_032\",\"order_id\":\"1b2e5f43-6a8d-4b81-b994-725fea3d571f\",\"subscription_id\":\"dfb022e3-c405-46f3-91c6-510deab16eb2\",\"point_flow_id\":\"48d7f31b-2d12-412a-82dc-6788bcade81b\"}"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_033",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 36,
+      "response": "{\"detail\":\"amount_cents must be an integer\"}"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_034",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 36,
+      "response": "{\"detail\":\"amount_cents must be an integer\"}"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_035",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 500,
+      "latency_ms": 30,
+      "response": "Internal Server Error"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_036",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 21,
+      "response": "{\"detail\":\"amount_cents must be an integer\"}"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_037",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 20,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_037\",\"order_id\":\"cfc49130-7f27-43d4-91e5-9f69db2c4367\",\"subscription_id\":\"261c6764-631d-476c-83b8-fd03a43b0f5a\",\"point_flow_id\":\"5f14fc91-b7d5-4336-aba3-f0b0995db2b7\"}"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_038",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 400,
+      "latency_ms": 18,
+      "response": "{\"detail\":\"amount_cents must be an integer\"}"
+    },
+    {
+      "case_id": "fallback_bad_amount_format_039",
+      "category": "bad_amount_format",
+      "signature_mode": "valid",
+      "status_code": 0,
+      "latency_ms": 4,
+      "response": "request_error: "
+    },
+    {
+      "case_id": "fallback_duplicate_order_040",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 44,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_000\",\"order_id\":\"ca59923f-02aa-4264-a50b-dc594947b9c6\",\"subscription_id\":\"c2e3babe-8fc0-4832-b319-c68b475afe4a\",\"point_flow_id\":\"db380859-8f6f-4d15-ba5a-1c524ca14fe"
+    },
+    {
+      "case_id": "fallback_duplicate_order_041",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 43,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_000\",\"order_id\":\"ca59923f-02aa-4264-a50b-dc594947b9c6\",\"subscription_id\":\"c2e3babe-8fc0-4832-b319-c68b475afe4a\",\"point_flow_id\":\"db380859-8f6f-4d15-ba5a-1c524ca14fe"
+    },
+    {
+      "case_id": "fallback_duplicate_order_042",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 44,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_001\",\"order_id\":\"708a571f-ee55-466c-afd4-4d25ab685287\",\"subscription_id\":\"06f966a9-5b62-486b-ad62-f84fb6fe0b2c\",\"point_flow_id\":\"d44b9a32-bdd9-432e-86e5-6387419db7c"
+    },
+    {
+      "case_id": "fallback_duplicate_order_043",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 44,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_001\",\"order_id\":\"708a571f-ee55-466c-afd4-4d25ab685287\",\"subscription_id\":\"06f966a9-5b62-486b-ad62-f84fb6fe0b2c\",\"point_flow_id\":\"d44b9a32-bdd9-432e-86e5-6387419db7c"
+    },
+    {
+      "case_id": "fallback_duplicate_order_044",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 44,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_002\",\"order_id\":\"4011c385-f350-4244-bcde-df8822eaa90a\",\"subscription_id\":\"261c6764-631d-476c-83b8-fd03a43b0f5a\",\"point_flow_id\":\"a5478108-e5af-4459-a2cb-098ef742684"
+    },
+    {
+      "case_id": "fallback_duplicate_order_045",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 41,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_002\",\"order_id\":\"4011c385-f350-4244-bcde-df8822eaa90a\",\"subscription_id\":\"261c6764-631d-476c-83b8-fd03a43b0f5a\",\"point_flow_id\":\"a5478108-e5af-4459-a2cb-098ef742684"
+    },
+    {
+      "case_id": "fallback_duplicate_order_046",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 40,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_003\",\"order_id\":\"473092ff-65a9-4b1e-81fb-8c08cc312bd0\",\"subscription_id\":\"5f1a5c4d-3e74-4d23-b931-ba35d51299ed\",\"point_flow_id\":\"a807047d-a4a5-4c36-a90c-aaba23ccf8d"
+    },
+    {
+      "case_id": "fallback_duplicate_order_047",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 40,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_003\",\"order_id\":\"473092ff-65a9-4b1e-81fb-8c08cc312bd0\",\"subscription_id\":\"5f1a5c4d-3e74-4d23-b931-ba35d51299ed\",\"point_flow_id\":\"a807047d-a4a5-4c36-a90c-aaba23ccf8d"
+    },
+    {
+      "case_id": "fallback_duplicate_order_048",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 20,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_004\",\"order_id\":\"d3dfe3d4-05d6-4f3c-b4c5-c3c1a9bb6d01\",\"subscription_id\":\"06f966a9-5b62-486b-ad62-f84fb6fe0b2c\",\"point_flow_id\":\"99bb6082-dfdc-4295-b86e-94b634fea8c"
+    },
+    {
+      "case_id": "fallback_duplicate_order_049",
+      "category": "duplicate_order",
+      "signature_mode": "valid",
+      "status_code": 200,
+      "latency_ms": 19,
+      "response": "{\"status\":\"processed\",\"reason\":null,\"event_id\":\"evt_dup_004\",\"order_id\":\"d3dfe3d4-05d6-4f3c-b4c5-c3c1a9bb6d01\",\"subscription_id\":\"06f966a9-5b62-486b-ad62-f84fb6fe0b2c\",\"point_flow_id\":\"99bb6082-dfdc-4295-b86e-94b634fea8c"
+    }
+  ]
+}

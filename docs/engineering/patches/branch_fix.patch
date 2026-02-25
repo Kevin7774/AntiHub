@@ -1,0 +1,382 @@
+--- .tmp_branch_fix_orig/docker_ops.py	2026-01-23 17:40:30.005338527 +0800
++++ docker_ops.py	2026-01-23 17:34:53.051876807 +0800
+@@ -2,40 +2,179 @@
+ import shutil
+ import subprocess
+ import time
++from dataclasses import dataclass
+ from pathlib import Path
+-from typing import Dict, Iterable, Optional, Tuple
++from typing import Dict, Iterable, List, Optional, Tuple
+ 
+ import docker
+ 
+-from config import GIT_CLONE_TIMEOUT_SECONDS
++from config import DEFAULT_BRANCH, GIT_CLONE_TIMEOUT_SECONDS
+ 
+ 
+-def clone_repo(repo_url: str, branch: str, target_dir: Path) -> None:
+-    target_dir.parent.mkdir(parents=True, exist_ok=True)
+-    local_path = None
+-    if repo_url.startswith("file://"):
+-        local_path = Path(repo_url[len("file://") :])
+-    else:
+-        local_path = Path(repo_url)
++@dataclass
++class CloneResult:
++    requested_ref: Optional[str]
++    resolved_ref: Optional[str]
++    default_branch: Optional[str]
++    used_fallback: bool
++
++
++class GitRefNotFoundError(RuntimeError):
++    def __init__(
++        self,
++        message: str,
++        requested_ref: Optional[str] = None,
++        default_branch: Optional[str] = None,
++        heads: Optional[List[str]] = None,
++    ) -> None:
++        super().__init__(message)
++        self.requested_ref = requested_ref
++        self.default_branch = default_branch
++        self.heads = heads or []
++
+ 
++BRANCH_NOT_FOUND_PATTERN = re.compile(r"Remote branch .* not found", re.IGNORECASE)
++SYMBOLIC_REF_PATTERN = re.compile(r"^ref:\s+refs/heads/(?P<branch>\\S+)\\s+HEAD$")
++
++
++def normalize_ref(ref: Optional[str]) -> Optional[str]:
++    if ref is None:
++        return None
++    value = ref.strip()
++    if not value:
++        return None
++    if value.lower() == "auto":
++        return "auto"
++    return value
++
++
++def _is_local_repo(repo_url: str) -> Optional[Path]:
++    if repo_url.startswith("file://"):
++        return Path(repo_url[len("file://") :])
++    local_path = Path(repo_url)
+     if local_path.exists() and local_path.is_dir():
++        return local_path
++    return None
++
++
++def detect_default_branch(repo_url: str) -> Optional[str]:
++    if _is_local_repo(repo_url):
++        return None
++    try:
++        result = subprocess.run(
++            ["git", "ls-remote", "--symref", repo_url, "HEAD"],
++            check=True,
++            text=True,
++            capture_output=True,
++            timeout=GIT_CLONE_TIMEOUT_SECONDS,
++        )
++    except Exception:
++        return None
++    for line in result.stdout.splitlines():
++        line = line.strip()
++        if not line.startswith("ref:"):
++            continue
++        match = SYMBOLIC_REF_PATTERN.match(line)
++        if match:
++            return match.group("branch")
++        parts = line.split()
++        if len(parts) >= 2 and parts[1].startswith("refs/heads/"):
++            return parts[1].split("refs/heads/", 1)[1]
++    return None
++
++
++def list_remote_heads(repo_url: str, limit: int = 20) -> List[str]:
++    if _is_local_repo(repo_url):
++        return []
++    try:
++        result = subprocess.run(
++            ["git", "ls-remote", "--heads", repo_url],
++            check=True,
++            text=True,
++            capture_output=True,
++            timeout=GIT_CLONE_TIMEOUT_SECONDS,
++        )
++    except Exception:
++        return []
++    heads: List[str] = []
++    for line in result.stdout.splitlines():
++        parts = line.strip().split()
++        if len(parts) < 2:
++            continue
++        ref = parts[1]
++        if ref.startswith("refs/heads/"):
++            heads.append(ref.split("refs/heads/", 1)[1])
++        if len(heads) >= limit:
++            break
++    return heads
++
++
++def clone_repo(repo_url: str, ref: Optional[str], target_dir: Path) -> CloneResult:
++    target_dir.parent.mkdir(parents=True, exist_ok=True)
++    requested_ref = normalize_ref(ref)
++    local_path = _is_local_repo(repo_url)
++    if local_path:
+         shutil.copytree(local_path, target_dir, ignore=shutil.ignore_patterns(".git"))
+-        return
++        return CloneResult(requested_ref, requested_ref, None, False)
++
++    def run_clone(branch: str) -> None:
++        subprocess.run(
++            [
++                "git",
++                "clone",
++                "--depth",
++                "1",
++                "--branch",
++                branch,
++                repo_url,
++                str(target_dir),
++            ],
++            check=True,
++            text=True,
++            capture_output=True,
++            timeout=GIT_CLONE_TIMEOUT_SECONDS,
++        )
++
++    if requested_ref in {None, "auto"}:
++        default_branch = detect_default_branch(repo_url)
++        resolved_ref = default_branch or DEFAULT_BRANCH
++        run_clone(resolved_ref)
++        return CloneResult(requested_ref, resolved_ref, default_branch, False)
+ 
+-    subprocess.run(
+-        [
+-            "git",
+-            "clone",
+-            "--depth",
+-            "1",
+-            "--branch",
+-            branch,
+-            repo_url,
+-            str(target_dir),
+-        ],
+-        check=True,
+-        timeout=GIT_CLONE_TIMEOUT_SECONDS,
+-    )
++    try:
++        run_clone(requested_ref)
++        return CloneResult(requested_ref, requested_ref, None, False)
++    except subprocess.CalledProcessError as exc:
++        stderr = (exc.stderr or "") + (exc.stdout or "")
++        if BRANCH_NOT_FOUND_PATTERN.search(stderr):
++            default_branch = detect_default_branch(repo_url)
++            can_fallback = (
++                isinstance(requested_ref, str)
++                and requested_ref.lower() in {"master", "main"}
++            )
++            if can_fallback and default_branch and default_branch != requested_ref:
++                try:
++                    run_clone(default_branch)
++                    return CloneResult(requested_ref, default_branch, default_branch, True)
++                except subprocess.CalledProcessError:
++                    pass
++            heads = list_remote_heads(repo_url, limit=20)
++            suggestion = default_branch or DEFAULT_BRANCH
++            heads_text = ", ".join(heads) if heads else "N/A"
++            message = (
++                "Requested ref not found."
++                f" requested_ref={requested_ref}"
++                f" default_branch={default_branch or 'unknown'}"
++                f" suggestion=use '{suggestion}' or leave ref empty/auto"
++                f" heads={heads_text}"
++            )
++            raise GitRefNotFoundError(
++                message,
++                requested_ref=requested_ref,
++                default_branch=default_branch,
++                heads=heads,
++            ) from exc
++        raise
+ 
+ 
+ def ensure_dockerfile(target_dir: Path) -> Path:
+--- .tmp_branch_fix_orig/worker.py	2026-01-23 17:39:30.876150058 +0800
++++ worker.py	2026-01-23 17:32:40.838113205 +0800
+@@ -15,7 +15,6 @@
+     BUILD_ROOT,
+     CASE_LABEL_KEY,
+     CASE_LABEL_MANAGED,
+-    DEFAULT_BRANCH,
+     DOCKER_BUILD_TIMEOUT_SECONDS,
+     MANUAL_MAX_README_CHARS,
+     MANUAL_ROOT,
+@@ -29,11 +28,13 @@
+     WS_LOG_CHANNEL_PREFIX,
+ )
+ from docker_ops import (
++    GitRefNotFoundError,
+     build_image,
+     cleanup_build_dir,
+     clone_repo,
+     detect_exposed_port,
+     ensure_dockerfile,
++    normalize_ref,
+     run_container_dynamic,
+     run_container_fixed,
+     wait_for_container_running,
+@@ -106,6 +107,8 @@
+     message = str(exc)
+     if isinstance(exc, BuildError):
+         return exc.code, message
++    if isinstance(exc, GitRefNotFoundError):
++        return "GIT_REF_NOT_FOUND", message
+     if isinstance(exc, SoftTimeLimitExceeded):
+         return "TIMEOUT_BUILD", "Build task exceeded time limit"
+     if isinstance(exc, subprocess.CalledProcessError):
+@@ -131,6 +134,8 @@
+ 
+ def classify_manual_error(exc: Exception) -> tuple[str, str]:
+     message = str(exc)
++    if isinstance(exc, GitRefNotFoundError):
++        return "GIT_REF_NOT_FOUND", message
+     if isinstance(exc, subprocess.CalledProcessError):
+         return "MANUAL_CLONE_FAILED", message
+     if isinstance(exc, subprocess.TimeoutExpired):
+@@ -201,7 +206,7 @@
+     env: Optional[Dict[str, str]] = None,
+     auto_analyze: bool = False,
+ ) -> dict:
+-    ref = ref or DEFAULT_BRANCH
++    ref = normalize_ref(ref)
+     env = env or {}
+     update_case(case_id, {"status": "CLONING", "stage": "clone"})
+     target_dir = Path(BUILD_ROOT) / case_id
+@@ -209,8 +214,18 @@
+     port_reserved = False
+     container_started = False
+     try:
+-        publish_log(case_id, "system", f"Cloning repo {repo_url} (ref {ref})...")
+-        clone_repo(repo_url, ref, target_dir)
++        publish_log(case_id, "system", f"Cloning repo {repo_url} (ref {ref or 'auto'})...")
++        clone_result = clone_repo(repo_url, ref, target_dir)
++        if clone_result.resolved_ref and (ref in {None, 'auto'} or clone_result.used_fallback):
++            update_case(case_id, {"ref": clone_result.resolved_ref, "branch": clone_result.resolved_ref})
++        if clone_result.used_fallback:
++            publish_log(
++                case_id,
++                "system",
++                f"Requested ref '{clone_result.requested_ref}' not found; fallback to '{clone_result.resolved_ref}'.",
++            )
++        elif clone_result.requested_ref in {None, "auto"} and clone_result.default_branch:
++            publish_log(case_id, "system", f"Auto detected default branch '{clone_result.resolved_ref}'.")
+         publish_log(case_id, "system", "Clone completed")
+         try:
+             commit_sha = (
+@@ -347,7 +362,7 @@
+     start = time.time()
+     data = get_case(case_id) or {}
+     repo_url = data.get("repo_url")
+-    ref = data.get("ref") or data.get("branch") or DEFAULT_BRANCH
++    ref = normalize_ref(data.get("ref") or data.get("branch"))
+     env_keys = data.get("env_keys") or []
+     if not repo_url:
+         error_code = "MANUAL_GENERATION_FAILED"
+@@ -367,7 +382,15 @@
+     update_case(case_id, {"manual_status": "RUNNING"})
+     target_dir = Path(MANUAL_ROOT) / case_id
+     try:
+-        clone_repo(repo_url, ref, target_dir)
++        clone_result = clone_repo(repo_url, ref, target_dir)
++        if clone_result.used_fallback:
++            publish_log(
++                case_id,
++                "system",
++                f"Manual clone fallback to '{clone_result.resolved_ref}' after missing ref '{clone_result.requested_ref}'.",
++            )
++        elif clone_result.requested_ref in {None, "auto"} and clone_result.default_branch:
++            publish_log(case_id, "system", f"Manual clone auto detected '{clone_result.resolved_ref}'.")
+         manual_md, meta = generate_manual(
+             target_dir,
+             env_keys=env_keys,
+--- .tmp_branch_fix_orig/main.py	2026-01-23 17:38:49.303727435 +0800
++++ main.py	2026-01-23 17:31:44.459331369 +0800
+@@ -17,7 +17,6 @@
+     CASE_LABEL_MANAGED,
+     CASE_TEMPLATES,
+     CORS_ORIGINS,
+-    DEFAULT_BRANCH,
+     PORT_MODE,
+     PUBLIC_HOST,
+     STARTUP_TIMEOUT_SECONDS,
+@@ -78,11 +77,11 @@
+     )
+     ref: Optional[str] = Field(
+         None,
+-        description="Git ref (alias for branch).",
++        description="Git ref (alias for branch). Optional; empty or 'auto' to auto-detect default branch.",
+     )
+     branch: Optional[str] = Field(
+         None,
+-        description="Git branch (alias for ref).",
++        description="Git branch (alias for ref). Optional; empty or 'auto' to auto-detect default branch.",
+     )
+     container_port: Optional[int] = Field(None, description="Container port override")
+     env: Dict[str, str] = Field(
+@@ -395,7 +394,11 @@
+     repo_url = payload.repo_url or payload.git_url
+     if not repo_url:
+         raise HTTPException(status_code=422, detail="git_url or repo_url is required")
+-    ref = payload.ref or payload.branch or DEFAULT_BRANCH
++    ref = payload.ref or payload.branch
++    if ref is not None:
++        ref = ref.strip()
++        if not ref:
++            ref = None
+     case_id = f"c_{uuid.uuid4().hex[:6]}"
+     now = time.time()
+     env_keys = sorted(list((payload.env or {}).keys()))
+@@ -532,7 +535,7 @@
+         repo_url = data.get("repo_url")
+         if not repo_url:
+             raise HTTPException(status_code=400, detail="Missing repo_url for retry")
+-        ref = data.get("ref") or data.get("branch") or DEFAULT_BRANCH
++        ref = data.get("ref") or data.get("branch")
+         container_port = data.get("container_port")
+         retry_env = env or {}
+         env_keys = sorted(retry_env.keys()) if retry_env else sorted(data.get("env_keys") or [])
+--- .tmp_branch_fix_orig/errors.py	2026-01-23 17:38:10.641559548 +0800
++++ errors.py	2026-01-23 17:31:49.703427814 +0800
+@@ -13,6 +13,10 @@
+         "message": "Git 克隆失败",
+         "hint": "检查仓库地址、网络与权限配置。",
+     },
++    "GIT_REF_NOT_FOUND": {
++        "message": "Git 分支不存在",
++        "hint": "确认 ref/branch 是否存在，或留空自动识别默认分支。",
++    },
+     "GIT_CLONE_TIMEOUT": {
+         "message": "Git 克隆超时",
+         "hint": "缩小仓库或提升克隆超时。",
+--- .tmp_branch_fix_orig/frontend/src/App.tsx	2026-01-23 17:38:24.664656099 +0800
++++ frontend/src/App.tsx	2026-01-23 17:32:02.513356701 +0800
+@@ -114,6 +114,7 @@
+   DOCKER_API_ERROR: "Docker 守护进程错误，请确认 Docker 正常运行且端口未被占用。",
+   DOCKERFILE_MISSING: "仓库根目录缺少 Dockerfile。",
+   GIT_CLONE_FAILED: "Git 克隆失败，请检查仓库地址与权限。",
++  GIT_REF_NOT_FOUND: "分支不存在，请改用默认分支或留空自动识别。",
+   GIT_CLONE_TIMEOUT: "Git 克隆超时，请重试或使用更小的仓库。",
+   TIMEOUT_CLONE: "克隆超时，请检查仓库体积或超时配置。",
+   TIMEOUT_BUILD: "构建超时，请检查构建步骤与超时配置。",
+@@ -523,7 +524,7 @@
+               <span>Ref/分支</span>
+               <input
+                 type="text"
+-                placeholder="main / 分支 / 标签"
++                placeholder="留空自动识别默认分支（常见 main/master）"
+                 value={ref}
+                 onChange={(event) => setRef(event.target.value)}
+               />

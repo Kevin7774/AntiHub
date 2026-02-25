@@ -1,0 +1,3705 @@
+--- README.md
++++ README.md
+@@ -1,13 +1,13 @@
+-# AntiHub Phase 1 快速上手（中文傻瓜版）
++# AntiHub
+ 
+ 目标：用本地 MetaGPT 仓库一键跑通 “创建 case -> 构建/运行 -> 实时日志 -> 查询状态”。
+ 
+-## 0. 项目概览 & 作用
++## 0. 项目概览
+ - 作用：给任意代码仓库做一键容器化部署，实时回放 build/run 日志，并暴露 API/WS 便于集成上层智能体。
+ - 特点：env 安全（只存 key）、状态机可达 RUNNING/FAILED（含错误码）、WS 支持历史回放+实时推送、默认一键脚本 `dev.sh up`（端口 8010）。
+ - 适用场景：本地/WSL 上快速验证 Agent 生成代码，或将已有仓库打成可访问的容器实例。
+ 
+-### 核心流程（文字版）
++### 核心流程
+ 1) `POST /cases`：记录 env_keys、排队构建。
+ 2) clone + Docker build（log: stream=build）。
+ 3) run 容器，探活成功后状态转 RUNNING（log: system/run）。
+@@ -40,7 +40,7 @@
+ 
+ ## 3. 一键启动（推荐）
+ ```bash
+-./dev.sh up
++bash ./dev.sh up
+ # 停止：./dev.sh down
+ # 日志：.devlogs/api.log 与 .devlogs/worker.log
+ ```
+@@ -106,7 +106,7 @@
+ - 端口映射：查看 `GET /cases/{id}` 返回的 `host_port`，浏览器访问 `http://localhost:{host_port}`
+ - 容器日志：`docker logs <container_id>`（从接口返回的 runtime.container_id 获取）
+ 
+-## 10. 冒烟测试（curl 串行）
++## 10. 测试（curl 串行）
+ ```bash
+ ./dev.sh up
+ export OPENAI_API_KEY=sk-xxx
+--- config.py
++++ config.py
+@@ -13,6 +13,15 @@
+ LOG_LIST_PREFIX = os.getenv("LOG_LIST_PREFIX", "logs:")
+ WS_LOG_CHANNEL_PREFIX = os.getenv("WS_LOG_CHANNEL_PREFIX", "build_logs:")
+ CASE_PREFIX = os.getenv("CASE_PREFIX", "case:")
++
++CORS_ORIGINS = [
++    origin.strip()
++    for origin in os.getenv(
++        "CORS_ORIGINS",
++        "http://127.0.0.1:5173,http://localhost:5173",
++    ).split(",")
++    if origin.strip()
++]
+ 
+ GIT_CLONE_TIMEOUT_SECONDS = int(os.getenv("GIT_CLONE_TIMEOUT_SECONDS", "120"))
+ DOCKER_BUILD_TIMEOUT_SECONDS = int(os.getenv("DOCKER_BUILD_TIMEOUT_SECONDS", "1800"))
+--- main.py
++++ main.py
+@@ -1,26 +1,64 @@
+ from __future__ import annotations
+ 
++import time
+ import uuid
+ from typing import Any, Dict, List, Optional
+ 
+ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
++from fastapi.middleware.cors import CORSMiddleware
+ from pydantic import BaseModel, ConfigDict, Field
+ 
+-from config import DEFAULT_BRANCH
++from config import CORS_ORIGINS, DEFAULT_BRANCH
+ from storage import decode_log_entry, get_async_redis_client, get_case, get_logs, log_channel, set_case
+ from worker import analyze_case, build_and_run
+ 
+ app = FastAPI(title="Agent Platform", version="0.2.0")
+-
+-
+-class CreateCaseRequest(BaseModel):
+-    repo_url: str = Field(..., alias="git_url", description="Git repository URL")
+-    branch: str = Field(DEFAULT_BRANCH, alias="ref", description="Git branch")
++app.add_middleware(
++    CORSMiddleware,
++    allow_origins=CORS_ORIGINS,
++    allow_credentials=True,
++    allow_methods=["*"],
++    allow_headers=["*"],
++)
++
++STAGE_VALUES = {"clone", "build", "run", "analyze", "system"}
++STATUS_STAGE_MAP = {
++    "PENDING": "system",
++    "CLONING": "clone",
++    "BUILDING": "build",
++    "STARTING": "run",
++    "RUNNING": "run",
++    "FINISHED": "run",
++    "FAILED": "system",
++    "ANALYZING": "analyze",
++}
++
++
++class CaseCreateRequest(BaseModel):
++    git_url: Optional[str] = Field(
++        None,
++        description="Git repository URL (alias for repo_url).",
++    )
++    repo_url: Optional[str] = Field(
++        None,
++        description="Git repository URL.",
++    )
++    ref: Optional[str] = Field(
++        None,
++        description="Git ref (alias for branch).",
++    )
++    branch: Optional[str] = Field(
++        None,
++        description="Git branch (alias for ref).",
++    )
+     container_port: Optional[int] = Field(None, description="Container port override")
+-    env: Dict[str, str] = Field(default_factory=dict, description="Environment variables")
+-    auto_analyze: bool = Field(True, description="Trigger analysis after deploy")
++    env: Dict[str, str] = Field(
++        default_factory=dict,
++        description="Environment variables (values are not stored).",
++    )
++    auto_analyze: bool = Field(False, description="Trigger analysis after deploy")
+ 
+-    model_config = ConfigDict(populate_by_name=True)
++    model_config = ConfigDict(extra="ignore")
+ 
+ 
+ class RuntimeInfo(BaseModel):
+@@ -35,21 +73,86 @@
+ class CaseResponse(BaseModel):
+     case_id: str
+     status: str
+-    repo_url: str
+-    branch: str
++    stage: str
++    commit_sha: Optional[str] = None
++    runtime: RuntimeInfo = Field(default_factory=RuntimeInfo)
++    env_keys: List[str] = Field(default_factory=list)
++    error_code: Optional[str] = None
++    error_message: Optional[str] = None
++    created_at: Optional[float] = None
++    updated_at: Optional[float] = None
++    repo_url: Optional[str] = None
++    ref: Optional[str] = None
++    branch: Optional[str] = None
+     container_port: Optional[int] = None
+     container_id: Optional[str] = None
+     host_port: Optional[int] = None
+     access_url: Optional[str] = None
+     image_tag: Optional[str] = None
+-    error_code: Optional[str] = None
+-    error_message: Optional[str] = None
+     last_log_at: Optional[float] = None
+-    env_keys: List[str] = Field(default_factory=list)
+-    commit_sha: Optional[str] = None
+-    stage: Optional[str] = None
+     report_ready: bool = False
+-    runtime: Optional[RuntimeInfo] = None
++
++
++def normalize_stage(raw_stage: Optional[str], status: Optional[str]) -> str:
++    if raw_stage:
++        normalized = raw_stage.lower()
++        if normalized in STAGE_VALUES:
++            return normalized
++    if status:
++        return STATUS_STAGE_MAP.get(status.upper(), "system")
++    return "system"
++
++
++def build_case_response(case_id: str, data: Dict[str, Any]) -> CaseResponse:
++    status = (data.get("status") or "PENDING").upper()
++    stage = normalize_stage(data.get("stage"), status)
++    runtime_data = data.get("runtime") or {}
++    if not isinstance(runtime_data, dict):
++        runtime_data = {}
++    runtime = RuntimeInfo(**runtime_data)
++    container_id = data.get("container_id") or runtime.container_id
++    host_port = data.get("host_port") or runtime.host_port
++    access_url = data.get("access_url") or runtime.access_url
++    runtime = RuntimeInfo(
++        container_id=container_id,
++        host_port=host_port,
++        access_url=access_url,
++        started_at=runtime.started_at,
++        exited_at=runtime.exited_at,
++        exit_code=runtime.exit_code,
++    )
++    env_keys = sorted(data.get("env_keys") or [])
++    error_code = data.get("error_code")
++    error_message = data.get("error_message")
++    if status == "FAILED":
++        if not error_code:
++            error_code = "UNEXPECTED_ERROR"
++        if not error_message:
++            error_message = "Unknown failure"
++    ref_value = data.get("ref") or data.get("branch")
++    branch_value = data.get("branch") or ref_value
++    return CaseResponse(
++        case_id=case_id,
++        status=status,
++        stage=stage,
++        commit_sha=data.get("commit_sha"),
++        runtime=runtime,
++        env_keys=env_keys,
++        error_code=error_code,
++        error_message=error_message,
++        created_at=data.get("created_at"),
++        updated_at=data.get("updated_at"),
++        repo_url=data.get("repo_url"),
++        ref=ref_value,
++        branch=branch_value,
++        container_port=data.get("container_port"),
++        container_id=container_id,
++        host_port=host_port,
++        access_url=access_url,
++        image_tag=data.get("image_tag"),
++        last_log_at=data.get("last_log_at"),
++        report_ready=bool(data.get("report_ready", False)),
++    )
+ 
+ 
+ @app.get("/healthz")
+@@ -58,22 +161,45 @@
+ 
+ 
+ @app.post("/cases", response_model=CaseResponse)
+-async def create_case(payload: CreateCaseRequest) -> CaseResponse:
++async def create_case(payload: CaseCreateRequest) -> CaseResponse:
++    repo_url = payload.repo_url or payload.git_url
++    if not repo_url:
++        raise HTTPException(status_code=422, detail="git_url or repo_url is required")
++    ref = payload.ref or payload.branch or DEFAULT_BRANCH
+     case_id = f"c_{uuid.uuid4().hex[:6]}"
++    now = time.time()
+     env_keys = sorted(list((payload.env or {}).keys()))
+     data: Dict[str, Any] = {
+         "case_id": case_id,
+         "status": "PENDING",
+-        "stage": "PENDING",
+-        "repo_url": payload.repo_url,
+-        "branch": payload.branch,
++        "stage": "system",
++        "repo_url": repo_url,
++        "ref": ref,
++        "branch": ref,
+         "container_port": payload.container_port,
+         "env_keys": env_keys,
+         "report_ready": False,
++        "created_at": now,
++        "updated_at": now,
++        "runtime": {
++            "container_id": None,
++            "host_port": None,
++            "access_url": None,
++            "started_at": None,
++            "exited_at": None,
++            "exit_code": None,
++        },
+     }
+     set_case(case_id, data)
+-    build_and_run.delay(case_id, payload.repo_url, payload.branch, payload.container_port, payload.env, payload.auto_analyze)
+-    return CaseResponse(**data)
++    build_and_run.delay(
++        case_id,
++        repo_url,
++        ref,
++        payload.container_port,
++        payload.env,
++        payload.auto_analyze,
++    )
++    return build_case_response(case_id, data)
+ 
+ 
+ @app.get("/cases/{case_id}", response_model=CaseResponse)
+@@ -82,7 +208,7 @@
+     if not data:
+         raise HTTPException(status_code=404, detail="Case not found")
+     data.pop("case_id", None)
+-    return CaseResponse(case_id=case_id, **data)
++    return build_case_response(case_id, data)
+ 
+ 
+ @app.post("/cases/{case_id}/analyze")
+--- requirements.txt
++++ requirements.txt
+@@ -1,6 +1,7 @@
+-fastapi==0.112.0
+-uvicorn==0.30.5
+-celery==5.4.0
+-redis==5.0.8
+-docker==7.1.0
+-pydantic==2.8.2
+\ No newline at end of file
++fastapi==0.112.0
++uvicorn==0.30.5
++celery==5.4.0
++redis==5.0.8
++docker==7.1.0
++pydantic==2.8.2
++websockets==12.0
+--- storage.py
++++ storage.py
+@@ -25,6 +25,8 @@
+ def update_case(case_id: str, data: Dict[str, Any]) -> None:
+     if not data:
+         return
++    data = dict(data)
++    data["updated_at"] = time.time()
+     client = get_redis_client()
+     client.hset(f"{CASE_PREFIX}{case_id}", mapping=_encode_data(data))
+ 
+--- worker.py
++++ worker.py
+@@ -123,7 +123,7 @@
+                 case_id,
+                 {
+                     "status": "FINISHED",
+-                    "stage": "FINISHED",
++                    "stage": "run",
+                     "runtime": {
+                         **runtime,
+                         "exited_at": finished_at,
+@@ -137,7 +137,7 @@
+                 case_id,
+                 {
+                     "status": "FAILED",
+-                    "stage": "FAILED",
++                    "stage": "run",
+                     "error_code": "CONTAINER_EXIT_NONZERO",
+                     "error_message": f"Container exited with code {exit_code}",
+                     "runtime": {
+@@ -159,19 +159,19 @@
+ def build_and_run(
+     case_id: str,
+     repo_url: str,
+-    branch: Optional[str] = None,
++    ref: Optional[str] = None,
+     container_port: Optional[int] = None,
+     env: Optional[Dict[str, str]] = None,
+-    auto_analyze: bool = True,
++    auto_analyze: bool = False,
+ ) -> dict:
+-    branch = branch or DEFAULT_BRANCH
++    ref = ref or DEFAULT_BRANCH
+     env = env or {}
+-    update_case(case_id, {"status": "CLONING", "stage": "CLONING"})
++    update_case(case_id, {"status": "CLONING", "stage": "clone"})
+     target_dir = Path(BUILD_ROOT) / case_id
+     host_port: Optional[int] = None
+     try:
+-        publish_log(case_id, "system", f"Cloning repo {repo_url} (branch {branch})...")
+-        clone_repo(repo_url, branch, target_dir)
++        publish_log(case_id, "system", f"Cloning repo {repo_url} (ref {ref})...")
++        clone_repo(repo_url, ref, target_dir)
+         publish_log(case_id, "system", "Clone completed")
+         try:
+             commit_sha = (
+@@ -192,7 +192,7 @@
+             case_id,
+             {
+                 "status": "BUILDING",
+-                "stage": "BUILDING",
++                "stage": "build",
+                 "container_port": resolved_port,
+                 "env_keys": sorted(env.keys()),
+             },
+@@ -205,7 +205,7 @@
+         for event in build_image(client, target_dir, tag):
+             log_event(case_id, event)
+ 
+-        update_case(case_id, {"status": "STARTING", "stage": "STARTING"})
++        update_case(case_id, {"status": "STARTING", "stage": "run"})
+ 
+         if PORT_MODE == "dynamic":
+             container_id, host_port = run_container_dynamic(client, tag, resolved_port, env)
+@@ -219,7 +219,7 @@
+             case_id,
+             {
+                 "status": "RUNNING",
+-                "stage": "RUNNING",
++                "stage": "run",
+                 "container_id": container_id,
+                 "host_port": host_port,
+                 "access_url": access_url,
+@@ -239,11 +239,13 @@
+         return {"container_id": container_id, "host_port": host_port}
+     except Exception as exc:  # noqa: BLE001
+         error_code, error_message = classify_error(exc)
++        existing = get_case(case_id) or {}
++        stage = existing.get("stage") or "system"
+         update_case(
+             case_id,
+             {
+                 "status": "FAILED",
+-                "stage": "FAILED",
++                "stage": stage,
+                 "error_code": error_code,
+                 "error_message": error_message,
+             },
+@@ -263,4 +265,8 @@
+ 
+ @celery_app.task(name="analyze_case")
+ def analyze_case(case_id: str) -> None:
++    existing = get_case(case_id) or {}
++    status = existing.get("status") or "RUNNING"
++    if status not in {"FAILED", "FINISHED"}:
++        update_case(case_id, {"status": status, "stage": "analyze"})
+     publish_log(case_id, "analyze", "ANALYZE_QUEUED (stub)")
+--- second.md
++++ second.md
+@@ -0,0 +1,149 @@
++# Phase 2 前端交互与后端对齐验收报告
++
++## 1. 概述 / 范围 / 结论
++- 验收范围：创建 case -> build/run -> WS 实时日志 -> 状态与运行信息 -> ENV 注入安全，新增前端控制台与后端接口契约对齐。
++- 结论：PASS（前后端对齐完成，WS 回放+订阅稳定，接口契约与 OpenAPI 同步；端口池冲突属于已知问题，详见第 6 节）。
++
++## 2. 启动与基线确认
++- 启动：`./dev.sh up`
++- /docs：`http://127.0.0.1:8010/docs` -> 200
++- /openapi.json：字段已更新（见第 3 节摘要）
++- Phase1 基线：完成创建 case、WS 日志回放、状态查询（示例：`c_536b9e`）
++
++## 3. 接口契约（以 OpenAPI 为准）
++
++### 3.1 CaseCreateRequest
++- 字段：`git_url | repo_url`（二选一）、`ref | branch`（二选一）、`env`、`auto_analyze`、`container_port`
++- 说明：
++  - `git_url` / `repo_url` 兼容输入；内部统一为 `repo_url`
++  - `ref` / `branch` 兼容输入；内部统一为 `ref`
++  - `auto_analyze` 默认 `false`
++  - `env` 仅用于容器注入，不持久化 value（只保留 `env_keys`）
++
++### 3.2 CaseResponse / CaseStatusResponse
++- 必备字段：`case_id`, `status`, `stage`, `commit_sha`, `runtime`, `env_keys`, `error_code`, `error_message`, `created_at`, `updated_at`
++- 运行信息：`runtime = { container_id?, host_port?, access_url? }`（含 started/exited/exit_code）
++- 兼容字段：`repo_url`, `ref`, `branch`, `container_port`, `container_id`, `host_port`, `access_url`, `image_tag`, `last_log_at`
++
++### 3.3 状态/阶段定义
++- `status`：`PENDING/CLONING/BUILDING/STARTING/RUNNING/FAILED/FINISHED`（保持现有实现）
++- `stage`：`clone/build/run/analyze/system`（已统一为小写）
++
++### 3.4 WS 日志格式
++- JSON 行：`{"ts":<epoch_seconds>,"stream":"build|run|analyze|system","level":"INFO|ERROR","line":"..."}`
++- 机制：WS 连接后先回放 Redis List，再订阅 Redis Pub/Sub
++
++### 3.5 跨域与依赖
++- CORS：允许 `http://127.0.0.1:5173` / `http://localhost:5173`
++- 依赖：`websockets` 已加入 `requirements.txt`
++
++## 4. 前端功能清单（frontend/）
++- Create Case 页面
++  - 表单：`repo_url`、`ref`、`env`（可增删行）、`auto_analyze`
++  - 提交后展示 `case_id` 并跳转到 `/cases/:id`
++- Case Detail 页面
++  - 状态 Badge + stage + 更新时间
++  - Runtime 卡片：`access_url`（点击/复制）、`host_port`、`container_id`
++  - Env Keys 卡片：仅显示 key
++  - 错误卡片：`FAILED` 时显示 `error_code`、`error_message` + 可解释文案
++  - 日志面板：WS 回放+实时、自动滚动/暂停、按 stream 过滤、断线提示与一键重连
++  - 底部状态刷新按钮 + 轮询（2s，RUNNING/FAILED 后降频 5s）
++- 安全：不写入 localStorage，不打印 env value，不在页面显示明文值
++- 构建验证：`npm run build` 通过
++
++## 5. 联调用例证据（2 个）
++
++### 用例 1：轻量仓 hello-world（RUNNING）
++- 创建请求（env value 已打码）：
++```json
++{
++  "repo_url": "/home/user2643/code/AntiHub/test-repos/hello-world",
++  "ref": "master",
++  "env": {"FOO": "***"},
++  "auto_analyze": false
++}
++```
++- 创建响应：`case_id = c_db5ef1`（秒回）
++- WS 日志（摘录）：`.devlogs/phase2_case1_ws.jsonl`
++```json
++{"ts":1768981005.8472288,"stream":"system","level":"INFO","line":"Cloning repo /home/user2643/code/AntiHub/test-repos/hello-world (ref master)..."}
++{"ts":1768981006.0443277,"stream":"build","level":"INFO","line":"Step 1/5 : FROM nikolaik/python-nodejs:python3.9-nodejs20-slim"}
++```
++- 状态响应（摘录）：`.devlogs/phase2_case1_status.json`
++```json
++{"case_id":"c_db5ef1","status":"RUNNING","stage":"run","runtime":{"host_port":30000,"access_url":"http://localhost:30000"},"env_keys":["FOO"],"error_code":null}
++```
++- 访问验证：`curl http://localhost:30000/` -> `HTTP/1.0 200 OK`
++- 前端页面行为：
++  - 状态卡：RUNNING / stage=run / 更新时间显示
++  - Runtime 卡：access_url 可点击与复制
++  - Env Keys：展示 `FOO`
++  - 日志面板：build/system 实时日志可见、支持过滤与暂停
++- 结论：PASS
++
++### 用例 2：MetaGPT 场景仓（RUNNING）
++- 创建请求（env value 已打码）：
++```json
++{
++  "repo_url": "/home/user2643/code/AntiHub/test-repos/metagpt-min",
++  "ref": "master",
++  "env": {"OPENAI_API_KEY": "sk-****"},
++  "auto_analyze": false
++}
++```
++- 创建响应：`case_id = c_c6547a`（秒回）
++- WS 日志（摘录）：`.devlogs/phase2_case2_ws.jsonl`
++```json
++{"ts":1768981050.0024369,"stream":"system","level":"INFO","line":"Cloning repo /home/user2643/code/AntiHub/test-repos/metagpt-min (ref master)..."}
++{"ts":1768981050.195938,"stream":"build","level":"INFO","line":"Step 1/5 : FROM nikolaik/python-nodejs:python3.9-nodejs20-slim"}
++```
++- 状态响应（摘录）：`.devlogs/phase2_case2_status.json`
++```json
++{"case_id":"c_c6547a","status":"RUNNING","stage":"run","runtime":{"host_port":30000,"access_url":"http://localhost:30000"},"env_keys":["OPENAI_API_KEY"],"error_code":null}
++```
++- 访问验证：`curl http://localhost:30000/` -> `HTTP/1.0 200 OK`
++- 前端页面行为：
++  - 状态卡：RUNNING / stage=run
++  - Env Keys：展示 `OPENAI_API_KEY`
++  - 日志面板：build/system 可见，支持过滤与暂停
++- 结论：PASS
++
++## 6. 发现问题与修复记录（含 patch）
++1) WebSocket 依赖缺失
++- 修复：`requirements.txt` 加入 `websockets==12.0`
++
++2) 接口契约对齐
++- 修复：新增 `CaseCreateRequest`/`CaseResponse` 字段与默认值，补齐 `runtime`、`env_keys`、`error_code`、`created_at/updated_at`，统一 `stage` 枚举；OpenAPI 同步更新
++
++3) CORS/前端联调
++- 修复：后端允许 `http://127.0.0.1:5173` / `http://localhost:5173`
++
++4) 前端控制台
++- 修复：新增 `frontend/`（Vite + React + TS），支持创建、详情、WS 日志与可视化状态
++
++5) 端口池冲突（已知问题）
++- 现象：若已有容器占用 30000，新的 case 会在启动阶段报错 `port is already allocated`
++- 本次处理：停用旧容器释放端口后重试（对业务逻辑无侵入）
++
++Patch：`phase2.patch`
++- 应用方式（项目根目录）：`patch -p0 < phase2.patch`
++
++## 7. 启动说明
++- 后端：`./dev.sh up`
++- 前端：`cd frontend && npm i && npm run dev`
++- 并发启动（可选）：开两终端分别执行上述两条命令
++## 7.1 前端操作教程（快速上手）
++1) 启动前端：`cd frontend && npm i && npm run dev`，浏览器打开 `http://127.0.0.1:5173`  
++2) 创建案例：在“创建案例”页填写 `repo_url`、可选 `ref`，按需添加 env（只填 key 或打码 value），点击“创建案例”  
++3) 查看详情：提交后自动跳转到 `/cases/:id`，顶部显示状态与阶段  
++4) 运行信息：可点击访问 `access_url`，点击“复制”复制地址  
++5) 日志面板：支持按 `构建/运行/分析/系统` 过滤，支持“暂停滚动 / 自动滚动”切换  
++6) 断线处理：若 WS 断开，面板提示“已断开”，点击“重连”恢复  
++7) 状态刷新：点击“刷新状态”立即拉取；系统也会自动轮询
++
++## 8. 下一步（Phase 3）建议
++1) Case 列表/检索与生命周期管理（停止/重启/清理）
++2) 项目维度视图（按 repo/branch 统计与对比）
++3) 环境变量与凭据管理（仅 key 可见，支持模板与复用）
++4) 运行观测（资源用量、容器健康、失败聚类）
++5) 多租户/权限控制与审计日志
+\ No newline at end of file
+--- frontend/index.html
++++ frontend/index.html
+@@ -0,0 +1,12 @@
++<!doctype html>
++<html lang="zh-CN">
++  <head>
++    <meta charset="UTF-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
++    <title>AntiHub 控制台</title>
++  </head>
++  <body>
++    <div id="root"></div>
++    <script type="module" src="/src/main.tsx"></script>
++  </body>
++</html>
+--- frontend/package.json
++++ frontend/package.json
+@@ -0,0 +1,22 @@
++{
++  "name": "antihub-console",
++  "private": true,
++  "version": "0.0.0",
++  "type": "module",
++  "scripts": {
++    "dev": "vite",
++    "build": "vite build",
++    "preview": "vite preview"
++  },
++  "dependencies": {
++    "react": "^18.3.1",
++    "react-dom": "^18.3.1"
++  },
++  "devDependencies": {
++    "@types/react": "^18.3.3",
++    "@types/react-dom": "^18.3.0",
++    "@vitejs/plugin-react": "^4.3.1",
++    "typescript": "^5.5.4",
++    "vite": "^5.4.2"
++  }
++}
+--- frontend/package-lock.json
++++ frontend/package-lock.json
+@@ -0,0 +1,1726 @@
++{
++  "name": "antihub-console",
++  "version": "0.0.0",
++  "lockfileVersion": 3,
++  "requires": true,
++  "packages": {
++    "": {
++      "name": "antihub-console",
++      "version": "0.0.0",
++      "dependencies": {
++        "react": "^18.3.1",
++        "react-dom": "^18.3.1"
++      },
++      "devDependencies": {
++        "@types/react": "^18.3.3",
++        "@types/react-dom": "^18.3.0",
++        "@vitejs/plugin-react": "^4.3.1",
++        "typescript": "^5.5.4",
++        "vite": "^5.4.2"
++      }
++    },
++    "node_modules/@babel/code-frame": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/code-frame/-/code-frame-7.28.6.tgz",
++      "integrity": "sha512-JYgintcMjRiCvS8mMECzaEn+m3PfoQiyqukOMCCVQtoJGYJw8j/8LBJEiqkHLkfwCcs74E3pbAUFNg7d9VNJ+Q==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/helper-validator-identifier": "^7.28.5",
++        "js-tokens": "^4.0.0",
++        "picocolors": "^1.1.1"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/compat-data": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/compat-data/-/compat-data-7.28.6.tgz",
++      "integrity": "sha512-2lfu57JtzctfIrcGMz992hyLlByuzgIk58+hhGCxjKZ3rWI82NnVLjXcaTqkI2NvlcvOskZaiZ5kjUALo3Lpxg==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/core": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/core/-/core-7.28.6.tgz",
++      "integrity": "sha512-H3mcG6ZDLTlYfaSNi0iOKkigqMFvkTKlGUYlD8GW7nNOYRrevuA46iTypPyv+06V3fEmvvazfntkBU34L0azAw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/code-frame": "^7.28.6",
++        "@babel/generator": "^7.28.6",
++        "@babel/helper-compilation-targets": "^7.28.6",
++        "@babel/helper-module-transforms": "^7.28.6",
++        "@babel/helpers": "^7.28.6",
++        "@babel/parser": "^7.28.6",
++        "@babel/template": "^7.28.6",
++        "@babel/traverse": "^7.28.6",
++        "@babel/types": "^7.28.6",
++        "@jridgewell/remapping": "^2.3.5",
++        "convert-source-map": "^2.0.0",
++        "debug": "^4.1.0",
++        "gensync": "^1.0.0-beta.2",
++        "json5": "^2.2.3",
++        "semver": "^6.3.1"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      },
++      "funding": {
++        "type": "opencollective",
++        "url": "https://opencollective.com/babel"
++      }
++    },
++    "node_modules/@babel/generator": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/generator/-/generator-7.28.6.tgz",
++      "integrity": "sha512-lOoVRwADj8hjf7al89tvQ2a1lf53Z+7tiXMgpZJL3maQPDxh0DgLMN62B2MKUOFcoodBHLMbDM6WAbKgNy5Suw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/parser": "^7.28.6",
++        "@babel/types": "^7.28.6",
++        "@jridgewell/gen-mapping": "^0.3.12",
++        "@jridgewell/trace-mapping": "^0.3.28",
++        "jsesc": "^3.0.2"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/helper-compilation-targets": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/helper-compilation-targets/-/helper-compilation-targets-7.28.6.tgz",
++      "integrity": "sha512-JYtls3hqi15fcx5GaSNL7SCTJ2MNmjrkHXg4FSpOA/grxK8KwyZ5bubHsCq8FXCkua6xhuaaBit+3b7+VZRfcA==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/compat-data": "^7.28.6",
++        "@babel/helper-validator-option": "^7.27.1",
++        "browserslist": "^4.24.0",
++        "lru-cache": "^5.1.1",
++        "semver": "^6.3.1"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/helper-globals": {
++      "version": "7.28.0",
++      "resolved": "https://registry.npmjs.org/@babel/helper-globals/-/helper-globals-7.28.0.tgz",
++      "integrity": "sha512-+W6cISkXFa1jXsDEdYA8HeevQT/FULhxzR99pxphltZcVaugps53THCeiWA8SguxxpSp3gKPiuYfSWopkLQ4hw==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/helper-module-imports": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/helper-module-imports/-/helper-module-imports-7.28.6.tgz",
++      "integrity": "sha512-l5XkZK7r7wa9LucGw9LwZyyCUscb4x37JWTPz7swwFE/0FMQAGpiWUZn8u9DzkSBWEcK25jmvubfpw2dnAMdbw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/traverse": "^7.28.6",
++        "@babel/types": "^7.28.6"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/helper-module-transforms": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/helper-module-transforms/-/helper-module-transforms-7.28.6.tgz",
++      "integrity": "sha512-67oXFAYr2cDLDVGLXTEABjdBJZ6drElUSI7WKp70NrpyISso3plG9SAGEF6y7zbha/wOzUByWWTJvEDVNIUGcA==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/helper-module-imports": "^7.28.6",
++        "@babel/helper-validator-identifier": "^7.28.5",
++        "@babel/traverse": "^7.28.6"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      },
++      "peerDependencies": {
++        "@babel/core": "^7.0.0"
++      }
++    },
++    "node_modules/@babel/helper-plugin-utils": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/helper-plugin-utils/-/helper-plugin-utils-7.28.6.tgz",
++      "integrity": "sha512-S9gzZ/bz83GRysI7gAD4wPT/AI3uCnY+9xn+Mx/KPs2JwHJIz1W8PZkg2cqyt3RNOBM8ejcXhV6y8Og7ly/Dug==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/helper-string-parser": {
++      "version": "7.27.1",
++      "resolved": "https://registry.npmjs.org/@babel/helper-string-parser/-/helper-string-parser-7.27.1.tgz",
++      "integrity": "sha512-qMlSxKbpRlAridDExk92nSobyDdpPijUq2DW6oDnUqd0iOGxmQjyqhMIihI9+zv4LPyZdRje2cavWPbCbWm3eA==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/helper-validator-identifier": {
++      "version": "7.28.5",
++      "resolved": "https://registry.npmjs.org/@babel/helper-validator-identifier/-/helper-validator-identifier-7.28.5.tgz",
++      "integrity": "sha512-qSs4ifwzKJSV39ucNjsvc6WVHs6b7S03sOh2OcHF9UHfVPqWWALUsNUVzhSBiItjRZoLHx7nIarVjqKVusUZ1Q==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/helper-validator-option": {
++      "version": "7.27.1",
++      "resolved": "https://registry.npmjs.org/@babel/helper-validator-option/-/helper-validator-option-7.27.1.tgz",
++      "integrity": "sha512-YvjJow9FxbhFFKDSuFnVCe2WxXk1zWc22fFePVNEaWJEu8IrZVlda6N0uHwzZrUM1il7NC9Mlp4MaJYbYd9JSg==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/helpers": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/helpers/-/helpers-7.28.6.tgz",
++      "integrity": "sha512-xOBvwq86HHdB7WUDTfKfT/Vuxh7gElQ+Sfti2Cy6yIWNW05P8iUslOVcZ4/sKbE+/jQaukQAdz/gf3724kYdqw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/template": "^7.28.6",
++        "@babel/types": "^7.28.6"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/parser": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/parser/-/parser-7.28.6.tgz",
++      "integrity": "sha512-TeR9zWR18BvbfPmGbLampPMW+uW1NZnJlRuuHso8i87QZNq2JRF9i6RgxRqtEq+wQGsS19NNTWr2duhnE49mfQ==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/types": "^7.28.6"
++      },
++      "bin": {
++        "parser": "bin/babel-parser.js"
++      },
++      "engines": {
++        "node": ">=6.0.0"
++      }
++    },
++    "node_modules/@babel/plugin-transform-react-jsx-self": {
++      "version": "7.27.1",
++      "resolved": "https://registry.npmjs.org/@babel/plugin-transform-react-jsx-self/-/plugin-transform-react-jsx-self-7.27.1.tgz",
++      "integrity": "sha512-6UzkCs+ejGdZ5mFFC/OCUrv028ab2fp1znZmCZjAOBKiBK2jXD1O+BPSfX8X2qjJ75fZBMSnQn3Rq2mrBJK2mw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/helper-plugin-utils": "^7.27.1"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      },
++      "peerDependencies": {
++        "@babel/core": "^7.0.0-0"
++      }
++    },
++    "node_modules/@babel/plugin-transform-react-jsx-source": {
++      "version": "7.27.1",
++      "resolved": "https://registry.npmjs.org/@babel/plugin-transform-react-jsx-source/-/plugin-transform-react-jsx-source-7.27.1.tgz",
++      "integrity": "sha512-zbwoTsBruTeKB9hSq73ha66iFeJHuaFkUbwvqElnygoNbj/jHRsSeokowZFN3CZ64IvEqcmmkVe89OPXc7ldAw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/helper-plugin-utils": "^7.27.1"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      },
++      "peerDependencies": {
++        "@babel/core": "^7.0.0-0"
++      }
++    },
++    "node_modules/@babel/template": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/template/-/template-7.28.6.tgz",
++      "integrity": "sha512-YA6Ma2KsCdGb+WC6UpBVFJGXL58MDA6oyONbjyF/+5sBgxY/dwkhLogbMT2GXXyU84/IhRw/2D1Os1B/giz+BQ==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/code-frame": "^7.28.6",
++        "@babel/parser": "^7.28.6",
++        "@babel/types": "^7.28.6"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/traverse": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/traverse/-/traverse-7.28.6.tgz",
++      "integrity": "sha512-fgWX62k02qtjqdSNTAGxmKYY/7FSL9WAS1o2Hu5+I5m9T0yxZzr4cnrfXQ/MX0rIifthCSs6FKTlzYbJcPtMNg==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/code-frame": "^7.28.6",
++        "@babel/generator": "^7.28.6",
++        "@babel/helper-globals": "^7.28.0",
++        "@babel/parser": "^7.28.6",
++        "@babel/template": "^7.28.6",
++        "@babel/types": "^7.28.6",
++        "debug": "^4.3.1"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@babel/types": {
++      "version": "7.28.6",
++      "resolved": "https://registry.npmjs.org/@babel/types/-/types-7.28.6.tgz",
++      "integrity": "sha512-0ZrskXVEHSWIqZM/sQZ4EV3jZJXRkio/WCxaqKZP1g//CEWEPSfeZFcms4XeKBCHU0ZKnIkdJeU/kF+eRp5lBg==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/helper-string-parser": "^7.27.1",
++        "@babel/helper-validator-identifier": "^7.28.5"
++      },
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/@esbuild/aix-ppc64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.21.5.tgz",
++      "integrity": "sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "aix"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/android-arm": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.21.5.tgz",
++      "integrity": "sha512-vCPvzSjpPHEi1siZdlvAlsPxXl7WbOVUBBAowWug4rJHb68Ox8KualB+1ocNvT5fjv6wpkX6o/iEpbDrf68zcg==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/android-arm64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.21.5.tgz",
++      "integrity": "sha512-c0uX9VAUBQ7dTDCjq+wdyGLowMdtR/GoC2U5IYk/7D1H1JYC0qseD7+11iMP2mRLN9RcCMRcjC4YMclCzGwS/A==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/android-x64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.21.5.tgz",
++      "integrity": "sha512-D7aPRUUNHRBwHxzxRvp856rjUHRFW1SdQATKXH2hqA0kAZb1hKmi02OpYRacl0TxIGz/ZmXWlbZgjwWYaCakTA==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/darwin-arm64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.21.5.tgz",
++      "integrity": "sha512-DwqXqZyuk5AiWWf3UfLiRDJ5EDd49zg6O9wclZ7kUMv2WRFr4HKjXp/5t8JZ11QbQfUS6/cRCKGwYhtNAY88kQ==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/darwin-x64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.21.5.tgz",
++      "integrity": "sha512-se/JjF8NlmKVG4kNIuyWMV/22ZaerB+qaSi5MdrXtd6R08kvs2qCN4C09miupktDitvh8jRFflwGFBQcxZRjbw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/freebsd-arm64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.21.5.tgz",
++      "integrity": "sha512-5JcRxxRDUJLX8JXp/wcBCy3pENnCgBR9bN6JsY4OmhfUtIHe3ZW0mawA7+RDAcMLrMIZaf03NlQiX9DGyB8h4g==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/freebsd-x64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.21.5.tgz",
++      "integrity": "sha512-J95kNBj1zkbMXtHVH29bBriQygMXqoVQOQYA+ISs0/2l3T9/kj42ow2mpqerRBxDJnmkUDCaQT/dfNXWX/ZZCQ==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/linux-arm": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm/-/linux-arm-0.21.5.tgz",
++      "integrity": "sha512-bPb5AHZtbeNGjCKVZ9UGqGwo8EUu4cLq68E95A53KlxAPRmUyYv2D6F0uUI65XisGOL1hBP5mTronbgo+0bFcA==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/linux-arm64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-arm64/-/linux-arm64-0.21.5.tgz",
++      "integrity": "sha512-ibKvmyYzKsBeX8d8I7MH/TMfWDXBF3db4qM6sy+7re0YXya+K1cem3on9XgdT2EQGMu4hQyZhan7TeQ8XkGp4Q==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/linux-ia32": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-ia32/-/linux-ia32-0.21.5.tgz",
++      "integrity": "sha512-YvjXDqLRqPDl2dvRODYmmhz4rPeVKYvppfGYKSNGdyZkA01046pLWyRKKI3ax8fbJoK5QbxblURkwK/MWY18Tg==",
++      "cpu": [
++        "ia32"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/linux-loong64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-loong64/-/linux-loong64-0.21.5.tgz",
++      "integrity": "sha512-uHf1BmMG8qEvzdrzAqg2SIG/02+4/DHB6a9Kbya0XDvwDEKCoC8ZRWI5JJvNdUjtciBGFQ5PuBlpEOXQj+JQSg==",
++      "cpu": [
++        "loong64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/linux-mips64el": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-mips64el/-/linux-mips64el-0.21.5.tgz",
++      "integrity": "sha512-IajOmO+KJK23bj52dFSNCMsz1QP1DqM6cwLUv3W1QwyxkyIWecfafnI555fvSGqEKwjMXVLokcV5ygHW5b3Jbg==",
++      "cpu": [
++        "mips64el"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/linux-ppc64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-ppc64/-/linux-ppc64-0.21.5.tgz",
++      "integrity": "sha512-1hHV/Z4OEfMwpLO8rp7CvlhBDnjsC3CttJXIhBi+5Aj5r+MBvy4egg7wCbe//hSsT+RvDAG7s81tAvpL2XAE4w==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/linux-riscv64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-riscv64/-/linux-riscv64-0.21.5.tgz",
++      "integrity": "sha512-2HdXDMd9GMgTGrPWnJzP2ALSokE/0O5HhTUvWIbD3YdjME8JwvSCnNGBnTThKGEB91OZhzrJ4qIIxk/SBmyDDA==",
++      "cpu": [
++        "riscv64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/linux-s390x": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-s390x/-/linux-s390x-0.21.5.tgz",
++      "integrity": "sha512-zus5sxzqBJD3eXxwvjN1yQkRepANgxE9lgOW2qLnmr8ikMTphkjgXu1HR01K4FJg8h1kEEDAqDcZQtbrRnB41A==",
++      "cpu": [
++        "s390x"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/linux-x64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-0.21.5.tgz",
++      "integrity": "sha512-1rYdTpyv03iycF1+BhzrzQJCdOuAOtaqHTWJZCWvijKD2N5Xu0TtVC8/+1faWqcP9iBCWOmjmhoH94dH82BxPQ==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/netbsd-x64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/netbsd-x64/-/netbsd-x64-0.21.5.tgz",
++      "integrity": "sha512-Woi2MXzXjMULccIwMnLciyZH4nCIMpWQAs049KEeMvOcNADVxo0UBIQPfSmxB3CWKedngg7sWZdLvLczpe0tLg==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "netbsd"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/openbsd-x64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/openbsd-x64/-/openbsd-x64-0.21.5.tgz",
++      "integrity": "sha512-HLNNw99xsvx12lFBUwoT8EVCsSvRNDVxNpjZ7bPn947b8gJPzeHWyNVhFsaerc0n3TsbOINvRP2byTZ5LKezow==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "openbsd"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/sunos-x64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/sunos-x64/-/sunos-x64-0.21.5.tgz",
++      "integrity": "sha512-6+gjmFpfy0BHU5Tpptkuh8+uw3mnrvgs+dSPQXQOv3ekbordwnzTVEb4qnIvQcYXq6gzkyTnoZ9dZG+D4garKg==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "sunos"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/win32-arm64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/win32-arm64/-/win32-arm64-0.21.5.tgz",
++      "integrity": "sha512-Z0gOTd75VvXqyq7nsl93zwahcTROgqvuAcYDUr+vOv8uHhNSKROyU961kgtCD1e95IqPKSQKH7tBTslnS3tA8A==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/win32-ia32": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/win32-ia32/-/win32-ia32-0.21.5.tgz",
++      "integrity": "sha512-SWXFF1CL2RVNMaVs+BBClwtfZSvDgtL//G/smwAc5oVK/UPu2Gu9tIaRgFmYFFKrmg3SyAjSrElf0TiJ1v8fYA==",
++      "cpu": [
++        "ia32"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@esbuild/win32-x64": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/@esbuild/win32-x64/-/win32-x64-0.21.5.tgz",
++      "integrity": "sha512-tQd/1efJuzPC6rCFwEvLtci/xNFcTZknmXs98FYDfGE4wP9ClFV98nyKrzJKVPMhdDnjzLhdUyMX4PsQAPjwIw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ],
++      "engines": {
++        "node": ">=12"
++      }
++    },
++    "node_modules/@jridgewell/gen-mapping": {
++      "version": "0.3.13",
++      "resolved": "https://registry.npmjs.org/@jridgewell/gen-mapping/-/gen-mapping-0.3.13.tgz",
++      "integrity": "sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@jridgewell/sourcemap-codec": "^1.5.0",
++        "@jridgewell/trace-mapping": "^0.3.24"
++      }
++    },
++    "node_modules/@jridgewell/remapping": {
++      "version": "2.3.5",
++      "resolved": "https://registry.npmjs.org/@jridgewell/remapping/-/remapping-2.3.5.tgz",
++      "integrity": "sha512-LI9u/+laYG4Ds1TDKSJW2YPrIlcVYOwi2fUC6xB43lueCjgxV4lffOCZCtYFiH6TNOX+tQKXx97T4IKHbhyHEQ==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@jridgewell/gen-mapping": "^0.3.5",
++        "@jridgewell/trace-mapping": "^0.3.24"
++      }
++    },
++    "node_modules/@jridgewell/resolve-uri": {
++      "version": "3.1.2",
++      "resolved": "https://registry.npmjs.org/@jridgewell/resolve-uri/-/resolve-uri-3.1.2.tgz",
++      "integrity": "sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.0.0"
++      }
++    },
++    "node_modules/@jridgewell/sourcemap-codec": {
++      "version": "1.5.5",
++      "resolved": "https://registry.npmjs.org/@jridgewell/sourcemap-codec/-/sourcemap-codec-1.5.5.tgz",
++      "integrity": "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/@jridgewell/trace-mapping": {
++      "version": "0.3.31",
++      "resolved": "https://registry.npmjs.org/@jridgewell/trace-mapping/-/trace-mapping-0.3.31.tgz",
++      "integrity": "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@jridgewell/resolve-uri": "^3.1.0",
++        "@jridgewell/sourcemap-codec": "^1.4.14"
++      }
++    },
++    "node_modules/@rolldown/pluginutils": {
++      "version": "1.0.0-beta.27",
++      "resolved": "https://registry.npmjs.org/@rolldown/pluginutils/-/pluginutils-1.0.0-beta.27.tgz",
++      "integrity": "sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/@rollup/rollup-android-arm-eabi": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-android-arm-eabi/-/rollup-android-arm-eabi-4.56.0.tgz",
++      "integrity": "sha512-LNKIPA5k8PF1+jAFomGe3qN3bbIgJe/IlpDBwuVjrDKrJhVWywgnJvflMt/zkbVNLFtF1+94SljYQS6e99klnw==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ]
++    },
++    "node_modules/@rollup/rollup-android-arm64": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-android-arm64/-/rollup-android-arm64-4.56.0.tgz",
++      "integrity": "sha512-lfbVUbelYqXlYiU/HApNMJzT1E87UPGvzveGg2h0ktUNlOCxKlWuJ9jtfvs1sKHdwU4fzY7Pl8sAl49/XaEk6Q==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "android"
++      ]
++    },
++    "node_modules/@rollup/rollup-darwin-arm64": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-darwin-arm64/-/rollup-darwin-arm64-4.56.0.tgz",
++      "integrity": "sha512-EgxD1ocWfhoD6xSOeEEwyE7tDvwTgZc8Bss7wCWe+uc7wO8G34HHCUH+Q6cHqJubxIAnQzAsyUsClt0yFLu06w==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ]
++    },
++    "node_modules/@rollup/rollup-darwin-x64": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-darwin-x64/-/rollup-darwin-x64-4.56.0.tgz",
++      "integrity": "sha512-1vXe1vcMOssb/hOF8iv52A7feWW2xnu+c8BV4t1F//m9QVLTfNVpEdja5ia762j/UEJe2Z1jAmEqZAK42tVW3g==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ]
++    },
++    "node_modules/@rollup/rollup-freebsd-arm64": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-freebsd-arm64/-/rollup-freebsd-arm64-4.56.0.tgz",
++      "integrity": "sha512-bof7fbIlvqsyv/DtaXSck4VYQ9lPtoWNFCB/JY4snlFuJREXfZnm+Ej6yaCHfQvofJDXLDMTVxWscVSuQvVWUQ==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ]
++    },
++    "node_modules/@rollup/rollup-freebsd-x64": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-freebsd-x64/-/rollup-freebsd-x64-4.56.0.tgz",
++      "integrity": "sha512-KNa6lYHloW+7lTEkYGa37fpvPq+NKG/EHKM8+G/g9WDU7ls4sMqbVRV78J6LdNuVaeeK5WB9/9VAFbKxcbXKYg==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "freebsd"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-arm-gnueabihf": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm-gnueabihf/-/rollup-linux-arm-gnueabihf-4.56.0.tgz",
++      "integrity": "sha512-E8jKK87uOvLrrLN28jnAAAChNq5LeCd2mGgZF+fGF5D507WlG/Noct3lP/QzQ6MrqJ5BCKNwI9ipADB6jyiq2A==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-arm-musleabihf": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm-musleabihf/-/rollup-linux-arm-musleabihf-4.56.0.tgz",
++      "integrity": "sha512-jQosa5FMYF5Z6prEpTCCmzCXz6eKr/tCBssSmQGEeozA9tkRUty/5Vx06ibaOP9RCrW1Pvb8yp3gvZhHwTDsJw==",
++      "cpu": [
++        "arm"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-arm64-gnu": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm64-gnu/-/rollup-linux-arm64-gnu-4.56.0.tgz",
++      "integrity": "sha512-uQVoKkrC1KGEV6udrdVahASIsaF8h7iLG0U0W+Xn14ucFwi6uS539PsAr24IEF9/FoDtzMeeJXJIBo5RkbNWvQ==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-arm64-musl": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-arm64-musl/-/rollup-linux-arm64-musl-4.56.0.tgz",
++      "integrity": "sha512-vLZ1yJKLxhQLFKTs42RwTwa6zkGln+bnXc8ueFGMYmBTLfNu58sl5/eXyxRa2RarTkJbXl8TKPgfS6V5ijNqEA==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-loong64-gnu": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-loong64-gnu/-/rollup-linux-loong64-gnu-4.56.0.tgz",
++      "integrity": "sha512-FWfHOCub564kSE3xJQLLIC/hbKqHSVxy8vY75/YHHzWvbJL7aYJkdgwD/xGfUlL5UV2SB7otapLrcCj2xnF1dg==",
++      "cpu": [
++        "loong64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-loong64-musl": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-loong64-musl/-/rollup-linux-loong64-musl-4.56.0.tgz",
++      "integrity": "sha512-z1EkujxIh7nbrKL1lmIpqFTc/sr0u8Uk0zK/qIEFldbt6EDKWFk/pxFq3gYj4Bjn3aa9eEhYRlL3H8ZbPT1xvA==",
++      "cpu": [
++        "loong64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-ppc64-gnu": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-ppc64-gnu/-/rollup-linux-ppc64-gnu-4.56.0.tgz",
++      "integrity": "sha512-iNFTluqgdoQC7AIE8Q34R3AuPrJGJirj5wMUErxj22deOcY7XwZRaqYmB6ZKFHoVGqRcRd0mqO+845jAibKCkw==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-ppc64-musl": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-ppc64-musl/-/rollup-linux-ppc64-musl-4.56.0.tgz",
++      "integrity": "sha512-MtMeFVlD2LIKjp2sE2xM2slq3Zxf9zwVuw0jemsxvh1QOpHSsSzfNOTH9uYW9i1MXFxUSMmLpeVeUzoNOKBaWg==",
++      "cpu": [
++        "ppc64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-riscv64-gnu": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-riscv64-gnu/-/rollup-linux-riscv64-gnu-4.56.0.tgz",
++      "integrity": "sha512-in+v6wiHdzzVhYKXIk5U74dEZHdKN9KH0Q4ANHOTvyXPG41bajYRsy7a8TPKbYPl34hU7PP7hMVHRvv/5aCSew==",
++      "cpu": [
++        "riscv64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-riscv64-musl": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-riscv64-musl/-/rollup-linux-riscv64-musl-4.56.0.tgz",
++      "integrity": "sha512-yni2raKHB8m9NQpI9fPVwN754mn6dHQSbDTwxdr9SE0ks38DTjLMMBjrwvB5+mXrX+C0npX0CVeCUcvvvD8CNQ==",
++      "cpu": [
++        "riscv64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-s390x-gnu": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-s390x-gnu/-/rollup-linux-s390x-gnu-4.56.0.tgz",
++      "integrity": "sha512-zhLLJx9nQPu7wezbxt2ut+CI4YlXi68ndEve16tPc/iwoylWS9B3FxpLS2PkmfYgDQtosah07Mj9E0khc3Y+vQ==",
++      "cpu": [
++        "s390x"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-x64-gnu": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-x64-gnu/-/rollup-linux-x64-gnu-4.56.0.tgz",
++      "integrity": "sha512-MVC6UDp16ZSH7x4rtuJPAEoE1RwS8N4oK9DLHy3FTEdFoUTCFVzMfJl/BVJ330C+hx8FfprA5Wqx4FhZXkj2Kw==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-linux-x64-musl": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-linux-x64-musl/-/rollup-linux-x64-musl-4.56.0.tgz",
++      "integrity": "sha512-ZhGH1eA4Qv0lxaV00azCIS1ChedK0V32952Md3FtnxSqZTBTd6tgil4nZT5cU8B+SIw3PFYkvyR4FKo2oyZIHA==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "linux"
++      ]
++    },
++    "node_modules/@rollup/rollup-openbsd-x64": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-openbsd-x64/-/rollup-openbsd-x64-4.56.0.tgz",
++      "integrity": "sha512-O16XcmyDeFI9879pEcmtWvD/2nyxR9mF7Gs44lf1vGGx8Vg2DRNx11aVXBEqOQhWb92WN4z7fW/q4+2NYzCbBA==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "openbsd"
++      ]
++    },
++    "node_modules/@rollup/rollup-openharmony-arm64": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-openharmony-arm64/-/rollup-openharmony-arm64-4.56.0.tgz",
++      "integrity": "sha512-LhN/Reh+7F3RCgQIRbgw8ZMwUwyqJM+8pXNT6IIJAqm2IdKkzpCh/V9EdgOMBKuebIrzswqy4ATlrDgiOwbRcQ==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "openharmony"
++      ]
++    },
++    "node_modules/@rollup/rollup-win32-arm64-msvc": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-arm64-msvc/-/rollup-win32-arm64-msvc-4.56.0.tgz",
++      "integrity": "sha512-kbFsOObXp3LBULg1d3JIUQMa9Kv4UitDmpS+k0tinPBz3watcUiV2/LUDMMucA6pZO3WGE27P7DsfaN54l9ing==",
++      "cpu": [
++        "arm64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ]
++    },
++    "node_modules/@rollup/rollup-win32-ia32-msvc": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-ia32-msvc/-/rollup-win32-ia32-msvc-4.56.0.tgz",
++      "integrity": "sha512-vSSgny54D6P4vf2izbtFm/TcWYedw7f8eBrOiGGecyHyQB9q4Kqentjaj8hToe+995nob/Wv48pDqL5a62EWtg==",
++      "cpu": [
++        "ia32"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ]
++    },
++    "node_modules/@rollup/rollup-win32-x64-gnu": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-x64-gnu/-/rollup-win32-x64-gnu-4.56.0.tgz",
++      "integrity": "sha512-FeCnkPCTHQJFbiGG49KjV5YGW/8b9rrXAM2Mz2kiIoktq2qsJxRD5giEMEOD2lPdgs72upzefaUvS+nc8E3UzQ==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ]
++    },
++    "node_modules/@rollup/rollup-win32-x64-msvc": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/@rollup/rollup-win32-x64-msvc/-/rollup-win32-x64-msvc-4.56.0.tgz",
++      "integrity": "sha512-H8AE9Ur/t0+1VXujj90w0HrSOuv0Nq9r1vSZF2t5km20NTfosQsGGUXDaKdQZzwuLts7IyL1fYT4hM95TI9c4g==",
++      "cpu": [
++        "x64"
++      ],
++      "dev": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "win32"
++      ]
++    },
++    "node_modules/@types/babel__core": {
++      "version": "7.20.5",
++      "resolved": "https://registry.npmjs.org/@types/babel__core/-/babel__core-7.20.5.tgz",
++      "integrity": "sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/parser": "^7.20.7",
++        "@babel/types": "^7.20.7",
++        "@types/babel__generator": "*",
++        "@types/babel__template": "*",
++        "@types/babel__traverse": "*"
++      }
++    },
++    "node_modules/@types/babel__generator": {
++      "version": "7.27.0",
++      "resolved": "https://registry.npmjs.org/@types/babel__generator/-/babel__generator-7.27.0.tgz",
++      "integrity": "sha512-ufFd2Xi92OAVPYsy+P4n7/U7e68fex0+Ee8gSG9KX7eo084CWiQ4sdxktvdl0bOPupXtVJPY19zk6EwWqUQ8lg==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/types": "^7.0.0"
++      }
++    },
++    "node_modules/@types/babel__template": {
++      "version": "7.4.4",
++      "resolved": "https://registry.npmjs.org/@types/babel__template/-/babel__template-7.4.4.tgz",
++      "integrity": "sha512-h/NUaSyG5EyxBIp8YRxo4RMe2/qQgvyowRwVMzhYhBCONbW8PUsg4lkFMrhgZhUe5z3L3MiLDuvyJ/CaPa2A8A==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/parser": "^7.1.0",
++        "@babel/types": "^7.0.0"
++      }
++    },
++    "node_modules/@types/babel__traverse": {
++      "version": "7.28.0",
++      "resolved": "https://registry.npmjs.org/@types/babel__traverse/-/babel__traverse-7.28.0.tgz",
++      "integrity": "sha512-8PvcXf70gTDZBgt9ptxJ8elBeBjcLOAcOtoO/mPJjtji1+CdGbHgm77om1GrsPxsiE+uXIpNSK64UYaIwQXd4Q==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/types": "^7.28.2"
++      }
++    },
++    "node_modules/@types/estree": {
++      "version": "1.0.8",
++      "resolved": "https://registry.npmjs.org/@types/estree/-/estree-1.0.8.tgz",
++      "integrity": "sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/@types/prop-types": {
++      "version": "15.7.15",
++      "resolved": "https://registry.npmjs.org/@types/prop-types/-/prop-types-15.7.15.tgz",
++      "integrity": "sha512-F6bEyamV9jKGAFBEmlQnesRPGOQqS2+Uwi0Em15xenOxHaf2hv6L8YCVn3rPdPJOiJfPiCnLIRyvwVaqMY3MIw==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/@types/react": {
++      "version": "18.3.27",
++      "resolved": "https://registry.npmjs.org/@types/react/-/react-18.3.27.tgz",
++      "integrity": "sha512-cisd7gxkzjBKU2GgdYrTdtQx1SORymWyaAFhaxQPK9bYO9ot3Y5OikQRvY0VYQtvwjeQnizCINJAenh/V7MK2w==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@types/prop-types": "*",
++        "csstype": "^3.2.2"
++      }
++    },
++    "node_modules/@types/react-dom": {
++      "version": "18.3.7",
++      "resolved": "https://registry.npmjs.org/@types/react-dom/-/react-dom-18.3.7.tgz",
++      "integrity": "sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ==",
++      "dev": true,
++      "license": "MIT",
++      "peerDependencies": {
++        "@types/react": "^18.0.0"
++      }
++    },
++    "node_modules/@vitejs/plugin-react": {
++      "version": "4.7.0",
++      "resolved": "https://registry.npmjs.org/@vitejs/plugin-react/-/plugin-react-4.7.0.tgz",
++      "integrity": "sha512-gUu9hwfWvvEDBBmgtAowQCojwZmJ5mcLn3aufeCsitijs3+f2NsrPtlAWIR6OPiqljl96GVCUbLe0HyqIpVaoA==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@babel/core": "^7.28.0",
++        "@babel/plugin-transform-react-jsx-self": "^7.27.1",
++        "@babel/plugin-transform-react-jsx-source": "^7.27.1",
++        "@rolldown/pluginutils": "1.0.0-beta.27",
++        "@types/babel__core": "^7.20.5",
++        "react-refresh": "^0.17.0"
++      },
++      "engines": {
++        "node": "^14.18.0 || >=16.0.0"
++      },
++      "peerDependencies": {
++        "vite": "^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0"
++      }
++    },
++    "node_modules/baseline-browser-mapping": {
++      "version": "2.9.17",
++      "resolved": "https://registry.npmjs.org/baseline-browser-mapping/-/baseline-browser-mapping-2.9.17.tgz",
++      "integrity": "sha512-agD0MgJFUP/4nvjqzIB29zRPUuCF7Ge6mEv9s8dHrtYD7QWXRcx75rOADE/d5ah1NI+0vkDl0yorDd5U852IQQ==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "bin": {
++        "baseline-browser-mapping": "dist/cli.js"
++      }
++    },
++    "node_modules/browserslist": {
++      "version": "4.28.1",
++      "resolved": "https://registry.npmjs.org/browserslist/-/browserslist-4.28.1.tgz",
++      "integrity": "sha512-ZC5Bd0LgJXgwGqUknZY/vkUQ04r8NXnJZ3yYi4vDmSiZmC/pdSN0NbNRPxZpbtO4uAfDUAFffO8IZoM3Gj8IkA==",
++      "dev": true,
++      "funding": [
++        {
++          "type": "opencollective",
++          "url": "https://opencollective.com/browserslist"
++        },
++        {
++          "type": "tidelift",
++          "url": "https://tidelift.com/funding/github/npm/browserslist"
++        },
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/ai"
++        }
++      ],
++      "license": "MIT",
++      "dependencies": {
++        "baseline-browser-mapping": "^2.9.0",
++        "caniuse-lite": "^1.0.30001759",
++        "electron-to-chromium": "^1.5.263",
++        "node-releases": "^2.0.27",
++        "update-browserslist-db": "^1.2.0"
++      },
++      "bin": {
++        "browserslist": "cli.js"
++      },
++      "engines": {
++        "node": "^6 || ^7 || ^8 || ^9 || ^10 || ^11 || ^12 || >=13.7"
++      }
++    },
++    "node_modules/caniuse-lite": {
++      "version": "1.0.30001765",
++      "resolved": "https://registry.npmjs.org/caniuse-lite/-/caniuse-lite-1.0.30001765.tgz",
++      "integrity": "sha512-LWcNtSyZrakjECqmpP4qdg0MMGdN368D7X8XvvAqOcqMv0RxnlqVKZl2V6/mBR68oYMxOZPLw/gO7DuisMHUvQ==",
++      "dev": true,
++      "funding": [
++        {
++          "type": "opencollective",
++          "url": "https://opencollective.com/browserslist"
++        },
++        {
++          "type": "tidelift",
++          "url": "https://tidelift.com/funding/github/npm/caniuse-lite"
++        },
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/ai"
++        }
++      ],
++      "license": "CC-BY-4.0"
++    },
++    "node_modules/convert-source-map": {
++      "version": "2.0.0",
++      "resolved": "https://registry.npmjs.org/convert-source-map/-/convert-source-map-2.0.0.tgz",
++      "integrity": "sha512-Kvp459HrV2FEJ1CAsi1Ku+MY3kasH19TFykTz2xWmMeq6bk2NU3XXvfJ+Q61m0xktWwt+1HSYf3JZsTms3aRJg==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/csstype": {
++      "version": "3.2.3",
++      "resolved": "https://registry.npmjs.org/csstype/-/csstype-3.2.3.tgz",
++      "integrity": "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/debug": {
++      "version": "4.4.3",
++      "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz",
++      "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "ms": "^2.1.3"
++      },
++      "engines": {
++        "node": ">=6.0"
++      },
++      "peerDependenciesMeta": {
++        "supports-color": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/electron-to-chromium": {
++      "version": "1.5.267",
++      "resolved": "https://registry.npmjs.org/electron-to-chromium/-/electron-to-chromium-1.5.267.tgz",
++      "integrity": "sha512-0Drusm6MVRXSOJpGbaSVgcQsuB4hEkMpHXaVstcPmhu5LIedxs1xNK/nIxmQIU/RPC0+1/o0AVZfBTkTNJOdUw==",
++      "dev": true,
++      "license": "ISC"
++    },
++    "node_modules/esbuild": {
++      "version": "0.21.5",
++      "resolved": "https://registry.npmjs.org/esbuild/-/esbuild-0.21.5.tgz",
++      "integrity": "sha512-mg3OPMV4hXywwpoDxu3Qda5xCKQi+vCTZq8S9J/EpkhB2HzKXq4SNFZE3+NK93JYxc8VMSep+lOUSC/RVKaBqw==",
++      "dev": true,
++      "hasInstallScript": true,
++      "license": "MIT",
++      "bin": {
++        "esbuild": "bin/esbuild"
++      },
++      "engines": {
++        "node": ">=12"
++      },
++      "optionalDependencies": {
++        "@esbuild/aix-ppc64": "0.21.5",
++        "@esbuild/android-arm": "0.21.5",
++        "@esbuild/android-arm64": "0.21.5",
++        "@esbuild/android-x64": "0.21.5",
++        "@esbuild/darwin-arm64": "0.21.5",
++        "@esbuild/darwin-x64": "0.21.5",
++        "@esbuild/freebsd-arm64": "0.21.5",
++        "@esbuild/freebsd-x64": "0.21.5",
++        "@esbuild/linux-arm": "0.21.5",
++        "@esbuild/linux-arm64": "0.21.5",
++        "@esbuild/linux-ia32": "0.21.5",
++        "@esbuild/linux-loong64": "0.21.5",
++        "@esbuild/linux-mips64el": "0.21.5",
++        "@esbuild/linux-ppc64": "0.21.5",
++        "@esbuild/linux-riscv64": "0.21.5",
++        "@esbuild/linux-s390x": "0.21.5",
++        "@esbuild/linux-x64": "0.21.5",
++        "@esbuild/netbsd-x64": "0.21.5",
++        "@esbuild/openbsd-x64": "0.21.5",
++        "@esbuild/sunos-x64": "0.21.5",
++        "@esbuild/win32-arm64": "0.21.5",
++        "@esbuild/win32-ia32": "0.21.5",
++        "@esbuild/win32-x64": "0.21.5"
++      }
++    },
++    "node_modules/escalade": {
++      "version": "3.2.0",
++      "resolved": "https://registry.npmjs.org/escalade/-/escalade-3.2.0.tgz",
++      "integrity": "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6"
++      }
++    },
++    "node_modules/fsevents": {
++      "version": "2.3.3",
++      "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz",
++      "integrity": "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==",
++      "dev": true,
++      "hasInstallScript": true,
++      "license": "MIT",
++      "optional": true,
++      "os": [
++        "darwin"
++      ],
++      "engines": {
++        "node": "^8.16.0 || ^10.6.0 || >=11.0.0"
++      }
++    },
++    "node_modules/gensync": {
++      "version": "1.0.0-beta.2",
++      "resolved": "https://registry.npmjs.org/gensync/-/gensync-1.0.0-beta.2.tgz",
++      "integrity": "sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=6.9.0"
++      }
++    },
++    "node_modules/js-tokens": {
++      "version": "4.0.0",
++      "resolved": "https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz",
++      "integrity": "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==",
++      "license": "MIT"
++    },
++    "node_modules/jsesc": {
++      "version": "3.1.0",
++      "resolved": "https://registry.npmjs.org/jsesc/-/jsesc-3.1.0.tgz",
++      "integrity": "sha512-/sM3dO2FOzXjKQhJuo0Q173wf2KOo8t4I8vHy6lF9poUp7bKT0/NHE8fPX23PwfhnykfqnC2xRxOnVw5XuGIaA==",
++      "dev": true,
++      "license": "MIT",
++      "bin": {
++        "jsesc": "bin/jsesc"
++      },
++      "engines": {
++        "node": ">=6"
++      }
++    },
++    "node_modules/json5": {
++      "version": "2.2.3",
++      "resolved": "https://registry.npmjs.org/json5/-/json5-2.2.3.tgz",
++      "integrity": "sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==",
++      "dev": true,
++      "license": "MIT",
++      "bin": {
++        "json5": "lib/cli.js"
++      },
++      "engines": {
++        "node": ">=6"
++      }
++    },
++    "node_modules/loose-envify": {
++      "version": "1.4.0",
++      "resolved": "https://registry.npmjs.org/loose-envify/-/loose-envify-1.4.0.tgz",
++      "integrity": "sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==",
++      "license": "MIT",
++      "dependencies": {
++        "js-tokens": "^3.0.0 || ^4.0.0"
++      },
++      "bin": {
++        "loose-envify": "cli.js"
++      }
++    },
++    "node_modules/lru-cache": {
++      "version": "5.1.1",
++      "resolved": "https://registry.npmjs.org/lru-cache/-/lru-cache-5.1.1.tgz",
++      "integrity": "sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==",
++      "dev": true,
++      "license": "ISC",
++      "dependencies": {
++        "yallist": "^3.0.2"
++      }
++    },
++    "node_modules/ms": {
++      "version": "2.1.3",
++      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
++      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/nanoid": {
++      "version": "3.3.11",
++      "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-3.3.11.tgz",
++      "integrity": "sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==",
++      "dev": true,
++      "funding": [
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/ai"
++        }
++      ],
++      "license": "MIT",
++      "bin": {
++        "nanoid": "bin/nanoid.cjs"
++      },
++      "engines": {
++        "node": "^10 || ^12 || ^13.7 || ^14 || >=15.0.1"
++      }
++    },
++    "node_modules/node-releases": {
++      "version": "2.0.27",
++      "resolved": "https://registry.npmjs.org/node-releases/-/node-releases-2.0.27.tgz",
++      "integrity": "sha512-nmh3lCkYZ3grZvqcCH+fjmQ7X+H0OeZgP40OierEaAptX4XofMh5kwNbWh7lBduUzCcV/8kZ+NDLCwm2iorIlA==",
++      "dev": true,
++      "license": "MIT"
++    },
++    "node_modules/picocolors": {
++      "version": "1.1.1",
++      "resolved": "https://registry.npmjs.org/picocolors/-/picocolors-1.1.1.tgz",
++      "integrity": "sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==",
++      "dev": true,
++      "license": "ISC"
++    },
++    "node_modules/postcss": {
++      "version": "8.5.6",
++      "resolved": "https://registry.npmjs.org/postcss/-/postcss-8.5.6.tgz",
++      "integrity": "sha512-3Ybi1tAuwAP9s0r1UQ2J4n5Y0G05bJkpUIO0/bI9MhwmD70S5aTWbXGBwxHrelT+XM1k6dM0pk+SwNkpTRN7Pg==",
++      "dev": true,
++      "funding": [
++        {
++          "type": "opencollective",
++          "url": "https://opencollective.com/postcss/"
++        },
++        {
++          "type": "tidelift",
++          "url": "https://tidelift.com/funding/github/npm/postcss"
++        },
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/ai"
++        }
++      ],
++      "license": "MIT",
++      "dependencies": {
++        "nanoid": "^3.3.11",
++        "picocolors": "^1.1.1",
++        "source-map-js": "^1.2.1"
++      },
++      "engines": {
++        "node": "^10 || ^12 || >=14"
++      }
++    },
++    "node_modules/react": {
++      "version": "18.3.1",
++      "resolved": "https://registry.npmjs.org/react/-/react-18.3.1.tgz",
++      "integrity": "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ==",
++      "license": "MIT",
++      "dependencies": {
++        "loose-envify": "^1.1.0"
++      },
++      "engines": {
++        "node": ">=0.10.0"
++      }
++    },
++    "node_modules/react-dom": {
++      "version": "18.3.1",
++      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-18.3.1.tgz",
++      "integrity": "sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw==",
++      "license": "MIT",
++      "dependencies": {
++        "loose-envify": "^1.1.0",
++        "scheduler": "^0.23.2"
++      },
++      "peerDependencies": {
++        "react": "^18.3.1"
++      }
++    },
++    "node_modules/react-refresh": {
++      "version": "0.17.0",
++      "resolved": "https://registry.npmjs.org/react-refresh/-/react-refresh-0.17.0.tgz",
++      "integrity": "sha512-z6F7K9bV85EfseRCp2bzrpyQ0Gkw1uLoCel9XBVWPg/TjRj94SkJzUTGfOa4bs7iJvBWtQG0Wq7wnI0syw3EBQ==",
++      "dev": true,
++      "license": "MIT",
++      "engines": {
++        "node": ">=0.10.0"
++      }
++    },
++    "node_modules/rollup": {
++      "version": "4.56.0",
++      "resolved": "https://registry.npmjs.org/rollup/-/rollup-4.56.0.tgz",
++      "integrity": "sha512-9FwVqlgUHzbXtDg9RCMgodF3Ua4Na6Gau+Sdt9vyCN4RhHfVKX2DCHy3BjMLTDd47ITDhYAnTwGulWTblJSDLg==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@types/estree": "1.0.8"
++      },
++      "bin": {
++        "rollup": "dist/bin/rollup"
++      },
++      "engines": {
++        "node": ">=18.0.0",
++        "npm": ">=8.0.0"
++      },
++      "optionalDependencies": {
++        "@rollup/rollup-android-arm-eabi": "4.56.0",
++        "@rollup/rollup-android-arm64": "4.56.0",
++        "@rollup/rollup-darwin-arm64": "4.56.0",
++        "@rollup/rollup-darwin-x64": "4.56.0",
++        "@rollup/rollup-freebsd-arm64": "4.56.0",
++        "@rollup/rollup-freebsd-x64": "4.56.0",
++        "@rollup/rollup-linux-arm-gnueabihf": "4.56.0",
++        "@rollup/rollup-linux-arm-musleabihf": "4.56.0",
++        "@rollup/rollup-linux-arm64-gnu": "4.56.0",
++        "@rollup/rollup-linux-arm64-musl": "4.56.0",
++        "@rollup/rollup-linux-loong64-gnu": "4.56.0",
++        "@rollup/rollup-linux-loong64-musl": "4.56.0",
++        "@rollup/rollup-linux-ppc64-gnu": "4.56.0",
++        "@rollup/rollup-linux-ppc64-musl": "4.56.0",
++        "@rollup/rollup-linux-riscv64-gnu": "4.56.0",
++        "@rollup/rollup-linux-riscv64-musl": "4.56.0",
++        "@rollup/rollup-linux-s390x-gnu": "4.56.0",
++        "@rollup/rollup-linux-x64-gnu": "4.56.0",
++        "@rollup/rollup-linux-x64-musl": "4.56.0",
++        "@rollup/rollup-openbsd-x64": "4.56.0",
++        "@rollup/rollup-openharmony-arm64": "4.56.0",
++        "@rollup/rollup-win32-arm64-msvc": "4.56.0",
++        "@rollup/rollup-win32-ia32-msvc": "4.56.0",
++        "@rollup/rollup-win32-x64-gnu": "4.56.0",
++        "@rollup/rollup-win32-x64-msvc": "4.56.0",
++        "fsevents": "~2.3.2"
++      }
++    },
++    "node_modules/scheduler": {
++      "version": "0.23.2",
++      "resolved": "https://registry.npmjs.org/scheduler/-/scheduler-0.23.2.tgz",
++      "integrity": "sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ==",
++      "license": "MIT",
++      "dependencies": {
++        "loose-envify": "^1.1.0"
++      }
++    },
++    "node_modules/semver": {
++      "version": "6.3.1",
++      "resolved": "https://registry.npmjs.org/semver/-/semver-6.3.1.tgz",
++      "integrity": "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA==",
++      "dev": true,
++      "license": "ISC",
++      "bin": {
++        "semver": "bin/semver.js"
++      }
++    },
++    "node_modules/source-map-js": {
++      "version": "1.2.1",
++      "resolved": "https://registry.npmjs.org/source-map-js/-/source-map-js-1.2.1.tgz",
++      "integrity": "sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==",
++      "dev": true,
++      "license": "BSD-3-Clause",
++      "engines": {
++        "node": ">=0.10.0"
++      }
++    },
++    "node_modules/typescript": {
++      "version": "5.9.3",
++      "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
++      "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
++      "dev": true,
++      "license": "Apache-2.0",
++      "bin": {
++        "tsc": "bin/tsc",
++        "tsserver": "bin/tsserver"
++      },
++      "engines": {
++        "node": ">=14.17"
++      }
++    },
++    "node_modules/update-browserslist-db": {
++      "version": "1.2.3",
++      "resolved": "https://registry.npmjs.org/update-browserslist-db/-/update-browserslist-db-1.2.3.tgz",
++      "integrity": "sha512-Js0m9cx+qOgDxo0eMiFGEueWztz+d4+M3rGlmKPT+T4IS/jP4ylw3Nwpu6cpTTP8R1MAC1kF4VbdLt3ARf209w==",
++      "dev": true,
++      "funding": [
++        {
++          "type": "opencollective",
++          "url": "https://opencollective.com/browserslist"
++        },
++        {
++          "type": "tidelift",
++          "url": "https://tidelift.com/funding/github/npm/browserslist"
++        },
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/ai"
++        }
++      ],
++      "license": "MIT",
++      "dependencies": {
++        "escalade": "^3.2.0",
++        "picocolors": "^1.1.1"
++      },
++      "bin": {
++        "update-browserslist-db": "cli.js"
++      },
++      "peerDependencies": {
++        "browserslist": ">= 4.21.0"
++      }
++    },
++    "node_modules/vite": {
++      "version": "5.4.21",
++      "resolved": "https://registry.npmjs.org/vite/-/vite-5.4.21.tgz",
++      "integrity": "sha512-o5a9xKjbtuhY6Bi5S3+HvbRERmouabWbyUcpXXUA1u+GNUKoROi9byOJ8M0nHbHYHkYICiMlqxkg1KkYmm25Sw==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "esbuild": "^0.21.3",
++        "postcss": "^8.4.43",
++        "rollup": "^4.20.0"
++      },
++      "bin": {
++        "vite": "bin/vite.js"
++      },
++      "engines": {
++        "node": "^18.0.0 || >=20.0.0"
++      },
++      "funding": {
++        "url": "https://github.com/vitejs/vite?sponsor=1"
++      },
++      "optionalDependencies": {
++        "fsevents": "~2.3.3"
++      },
++      "peerDependencies": {
++        "@types/node": "^18.0.0 || >=20.0.0",
++        "less": "*",
++        "lightningcss": "^1.21.0",
++        "sass": "*",
++        "sass-embedded": "*",
++        "stylus": "*",
++        "sugarss": "*",
++        "terser": "^5.4.0"
++      },
++      "peerDependenciesMeta": {
++        "@types/node": {
++          "optional": true
++        },
++        "less": {
++          "optional": true
++        },
++        "lightningcss": {
++          "optional": true
++        },
++        "sass": {
++          "optional": true
++        },
++        "sass-embedded": {
++          "optional": true
++        },
++        "stylus": {
++          "optional": true
++        },
++        "sugarss": {
++          "optional": true
++        },
++        "terser": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/yallist": {
++      "version": "3.1.1",
++      "resolved": "https://registry.npmjs.org/yallist/-/yallist-3.1.1.tgz",
++      "integrity": "sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==",
++      "dev": true,
++      "license": "ISC"
++    }
++  }
++}
+--- frontend/tsconfig.json
++++ frontend/tsconfig.json
+@@ -0,0 +1,16 @@
++{
++  "compilerOptions": {
++    "target": "ES2020",
++    "useDefineForClassFields": true,
++    "lib": ["ES2020", "DOM", "DOM.Iterable"],
++    "module": "ESNext",
++    "skipLibCheck": true,
++    "moduleResolution": "Bundler",
++    "resolveJsonModule": true,
++    "isolatedModules": true,
++    "noEmit": true,
++    "jsx": "react-jsx",
++    "strict": true
++  },
++  "include": ["src"]
++}
+--- frontend/vite.config.ts
++++ frontend/vite.config.ts
+@@ -0,0 +1,9 @@
++import { defineConfig } from "vite";
++import react from "@vitejs/plugin-react";
++
++export default defineConfig({
++  plugins: [react()],
++  server: {
++    port: 5173,
++  },
++});
+--- frontend/src/main.tsx
++++ frontend/src/main.tsx
+@@ -0,0 +1,10 @@
++import React from "react";
++import ReactDOM from "react-dom/client";
++import App from "./App";
++import "./styles.css";
++
++ReactDOM.createRoot(document.getElementById("root")!).render(
++  <React.StrictMode>
++    <App />
++  </React.StrictMode>
++);
+--- frontend/src/App.tsx
++++ frontend/src/App.tsx
+@@ -0,0 +1,721 @@
++import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
++
++const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8010";
++
++type RuntimeInfo = {
++  container_id?: string | null;
++  host_port?: number | null;
++  access_url?: string | null;
++  started_at?: number | null;
++  exited_at?: number | null;
++  exit_code?: number | null;
++};
++
++type CaseResponse = {
++  case_id: string;
++  status: string;
++  stage: string;
++  commit_sha?: string | null;
++  runtime?: RuntimeInfo | null;
++  env_keys?: string[];
++  error_code?: string | null;
++  error_message?: string | null;
++  created_at?: number | null;
++  updated_at?: number | null;
++};
++
++type LogEntry = {
++  ts: number | string;
++  stream: string;
++  level: string;
++  line: string;
++};
++
++type Route =
++  | { type: "create" }
++  | {
++      type: "case";
++      caseId: string;
++    };
++
++const ERROR_EXPLAIN: Record<string, string> = {
++  PORT_POOL_EXHAUSTED: "端口池已满，请停止旧容器或扩大端口范围。",
++  DOCKER_BUILD_FAILED: "Docker 镜像构建失败，请检查 Dockerfile 与构建日志。",
++  DOCKER_API_ERROR: "Docker 守护进程错误，请确认 Docker 正常运行且端口未被占用。",
++  DOCKERFILE_MISSING: "仓库根目录缺少 Dockerfile。",
++  GIT_CLONE_FAILED: "Git 克隆失败，请检查仓库地址与权限。",
++  GIT_CLONE_TIMEOUT: "Git 克隆超时，请重试或使用更小的仓库。",
++  STARTUP_TIMEOUT: "容器启动超时，请确认监听 0.0.0.0 且 EXPOSE 端口正确。",
++  CONTAINER_EXIT_NONZERO: "容器非零退出，请查看容器日志。",
++  UNEXPECTED_ERROR: "未知错误，请查看日志详情。",
++};
++
++const STREAM_LABELS: Record<string, string> = {
++  build: "构建",
++  run: "运行",
++  analyze: "分析",
++  system: "系统",
++};
++
++const STAGE_LABELS: Record<string, string> = {
++  clone: "克隆",
++  build: "构建",
++  run: "运行",
++  analyze: "分析",
++  system: "系统",
++};
++
++const STATUS_LABELS: Record<string, string> = {
++  PENDING: "待处理",
++  CLONING: "克隆中",
++  BUILDING: "构建中",
++  STARTING: "启动中",
++  RUNNING: "运行中",
++  FAILED: "失败",
++  FINISHED: "已结束",
++  ANALYZING: "分析中",
++};
++
++function streamLabel(stream: string) {
++  return STREAM_LABELS[stream] || stream;
++}
++
++function statusLabel(status?: string) {
++  if (!status) return "-";
++  const normalized = status.toUpperCase();
++  const label = STATUS_LABELS[normalized];
++  return label ? `${label} (${normalized})` : normalized;
++}
++
++function stageLabel(stage?: string) {
++  if (!stage) return "-";
++  const normalized = stage.toLowerCase();
++  const label = STAGE_LABELS[normalized];
++  return label ? `${label} (${normalized})` : stage;
++}
++
++function joinUrl(base: string, path: string) {
++  const trimmed = base.replace(/\/+$/, "");
++  return `${trimmed}${path}`;
++}
++
++function toWsUrl(base: string) {
++  if (base.startsWith("https://")) {
++    return base.replace("https://", "wss://");
++  }
++  if (base.startsWith("http://")) {
++    return base.replace("http://", "ws://");
++  }
++  return `ws://${base.replace(/^\/*/, "")}`;
++}
++
++function parseRoute(pathname: string): Route {
++  const match = pathname.match(/^\/cases\/([^/]+)$/);
++  if (match && match[1]) {
++    return { type: "case", caseId: match[1] };
++  }
++  return { type: "create" };
++}
++
++function useRoute() {
++  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.pathname));
++
++  useEffect(() => {
++    const onPop = () => setRoute(parseRoute(window.location.pathname));
++    window.addEventListener("popstate", onPop);
++    return () => window.removeEventListener("popstate", onPop);
++  }, []);
++
++  const navigate = useCallback((path: string) => {
++    window.history.pushState({}, "", path);
++    setRoute(parseRoute(path));
++  }, []);
++
++  return { route, navigate };
++}
++
++function formatTime(ts?: number | null) {
++  if (!ts) return "-";
++  const date = new Date(ts * 1000);
++  return date.toLocaleString();
++}
++
++function statusTone(status?: string) {
++  const normalized = (status || "").toUpperCase();
++  if (normalized === "RUNNING") return "running";
++  if (normalized === "FAILED") return "failed";
++  if (normalized === "BUILDING" || normalized === "CLONING" || normalized === "STARTING") {
++    return "working";
++  }
++  if (normalized === "FINISHED") return "finished";
++  return "neutral";
++}
++
++function App() {
++  const { route, navigate } = useRoute();
++  const [flashCaseId, setFlashCaseId] = useState<string | null>(null);
++
++  return (
++    <div className="app">
++      <header className="topbar">
++        <div className="brand">
++            <div className="brand-mark">AH</div>
++          <div>
++            <div className="brand-title">AntiHub 控制台</div>
++            <div className="brand-sub">阶段 2 - 创建、观测、对齐</div>
++          </div>
++        </div>
++        <div className="topbar-actions">
++          <button className="ghost" onClick={() => navigate("/")}>新建案例</button>
++          <a className="ghost" href="http://127.0.0.1:8010/docs" target="_blank" rel="noreferrer">
++            API 文档
++          </a>
++        </div>
++      </header>
++      <main className="main">
++        {route.type === "create" ? (
++          <CreateCase
++            onCreated={(caseId) => {
++              setFlashCaseId(caseId);
++              navigate(`/cases/${caseId}`);
++            }}
++          />
++        ) : (
++          <CaseDetail
++            caseId={route.caseId}
++            onBack={() => navigate("/")}
++            flashCaseId={flashCaseId}
++            clearFlash={() => setFlashCaseId(null)}
++          />
++        )}
++      </main>
++    </div>
++  );
++}
++
++type EnvRow = { id: string; key: string; value: string };
++
++function CreateCase({ onCreated }: { onCreated: (caseId: string) => void }) {
++  const [repoUrl, setRepoUrl] = useState("");
++  const [ref, setRef] = useState("");
++  const [autoAnalyze, setAutoAnalyze] = useState(false);
++  const [envRows, setEnvRows] = useState<EnvRow[]>([
++    { id: `env-${Date.now()}`, key: "", value: "" },
++  ]);
++  const [submitting, setSubmitting] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++
++  const addRow = () => {
++    setEnvRows((rows) => [...rows, { id: `env-${Date.now()}-${rows.length}`, key: "", value: "" }]);
++  };
++
++  const removeRow = (id: string) => {
++    setEnvRows((rows) => rows.filter((row) => row.id !== id));
++  };
++
++  const updateRow = (id: string, field: "key" | "value", value: string) => {
++    setEnvRows((rows) =>
++      rows.map((row) => (row.id === id ? { ...row, [field]: value } : row))
++    );
++  };
++
++  const handleSubmit = async (event: React.FormEvent) => {
++    event.preventDefault();
++    setError(null);
++
++    if (!repoUrl.trim()) {
++      setError("请填写仓库地址。");
++      return;
++    }
++
++    const env: Record<string, string> = {};
++    for (const row of envRows) {
++      const key = row.key.trim();
++      if (key) {
++        env[key] = row.value;
++      }
++    }
++
++    const payload: Record<string, unknown> = {
++      repo_url: repoUrl.trim(),
++      env,
++      auto_analyze: autoAnalyze,
++    };
++    if (ref.trim()) {
++      payload.ref = ref.trim();
++    }
++
++    setSubmitting(true);
++    try {
++      const response = await fetch(joinUrl(API_BASE, "/cases"), {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify(payload),
++      });
++      if (!response.ok) {
++        let message = `请求失败 (${response.status})`;
++        try {
++          const body = await response.json();
++          if (body && body.detail) {
++            message = body.detail;
++          }
++        } catch (err) {
++          const text = await response.text();
++          if (text) message = text;
++        }
++        setError(message);
++        return;
++      }
++      const data = (await response.json()) as CaseResponse;
++      setEnvRows([{ id: `env-${Date.now()}`, key: "", value: "" }]);
++      setRepoUrl("");
++      setRef("");
++      onCreated(data.case_id);
++    } catch (err) {
++      setError("网络错误，请检查 API 连接。");
++    } finally {
++      setSubmitting(false);
++    }
++  };
++
++  return (
++    <div className="create-grid">
++      <section className="card card-hero" style={{ animationDelay: "0.05s" }}>
++        <div className="section-title">创建案例</div>
++        <p className="section-sub">几秒内启动仓库并可视化全流程日志。</p>
++        <form className="form" onSubmit={handleSubmit}>
++          <label className="field">
++            <span>仓库地址</span>
++            <input
++              type="text"
++              placeholder="git_url / repo_url"
++              value={repoUrl}
++              onChange={(event) => setRepoUrl(event.target.value)}
++            />
++          </label>
++          <div className="field-row">
++            <label className="field">
++              <span>Ref/分支</span>
++              <input
++                type="text"
++                placeholder="main / 分支 / 标签"
++                value={ref}
++                onChange={(event) => setRef(event.target.value)}
++              />
++            </label>
++            <label className="field checkbox">
++              <span>自动分析</span>
++              <input
++                type="checkbox"
++                checked={autoAnalyze}
++                onChange={(event) => setAutoAnalyze(event.target.checked)}
++              />
++            </label>
++          </div>
++          <div className="env-block">
++            <div className="env-header">
++              <div>
++                <div className="env-title">环境变量</div>
++                <div className="env-sub">仅提交一次，后端不持久化值。</div>
++              </div>
++              <button type="button" className="ghost" onClick={addRow}>
++                添加一行
++              </button>
++            </div>
++            {envRows.map((row, index) => (
++              <div className="env-row" key={row.id}>
++                <input
++                  type="text"
++                  placeholder="键名"
++                  value={row.key}
++                  onChange={(event) => updateRow(row.id, "key", event.target.value)}
++                />
++                <input
++                  type="password"
++                  placeholder="值"
++                  value={row.value}
++                  onChange={(event) => updateRow(row.id, "value", event.target.value)}
++                />
++                <button
++                  type="button"
++                  className="danger"
++                  onClick={() => removeRow(row.id)}
++                  disabled={envRows.length === 1}
++                  aria-label={`remove env row ${index + 1}`}
++                >
++                  移除
++                </button>
++              </div>
++            ))}
++          </div>
++          {error ? <div className="error-banner">{error}</div> : null}
++          <button className="primary" type="submit" disabled={submitting}>
++            {submitting ? "创建中..." : "创建案例"}
++          </button>
++        </form>
++      </section>
++      <section className="card card-glow" style={{ animationDelay: "0.12s" }}>
++        <div className="section-title">你将获得</div>
++        <ul className="list">
++          <li>2 秒内返回 case_id</li>
++          <li>WS 日志回放 + 实时追踪</li>
++          <li>访问地址可点击/复制</li>
++          <li>仅展示 env 键名</li>
++        </ul>
++        <div className="note">
++          <div className="note-title">安全提示</div>
++          <div className="note-body">
++            env value 仅用于一次性注入，不会落库或写日志。
++          </div>
++        </div>
++      </section>
++    </div>
++  );
++}
++
++function CaseDetail({
++  caseId,
++  onBack,
++  flashCaseId,
++  clearFlash,
++}: {
++  caseId: string;
++  onBack: () => void;
++  flashCaseId: string | null;
++  clearFlash: () => void;
++}) {
++  const [caseData, setCaseData] = useState<CaseResponse | null>(null);
++  const [loadError, setLoadError] = useState<string | null>(null);
++  const [loading, setLoading] = useState(false);
++  const statusRef = useRef<string>("");
++  const fetchLock = useRef(false);
++
++  const fetchCase = useCallback(
++    async (silent = false) => {
++      if (fetchLock.current) return;
++      fetchLock.current = true;
++      if (!silent) {
++        setLoading(true);
++      }
++      setLoadError(null);
++      try {
++        const response = await fetch(joinUrl(API_BASE, `/cases/${caseId}`));
++        if (!response.ok) {
++          let message = `请求失败 (${response.status})`;
++          try {
++            const body = await response.json();
++            if (body && body.detail) {
++              message = body.detail;
++            }
++          } catch (err) {
++            const text = await response.text();
++            if (text) message = text;
++          }
++          setLoadError(message);
++          return;
++        }
++        const data = (await response.json()) as CaseResponse;
++        setCaseData(data);
++      } catch (err) {
++        setLoadError("网络错误，请检查 API 连接。");
++      } finally {
++        fetchLock.current = false;
++        if (!silent) {
++          setLoading(false);
++        }
++      }
++    },
++    [caseId]
++  );
++
++  useEffect(() => {
++    fetchCase();
++  }, [fetchCase]);
++
++  useEffect(() => {
++    statusRef.current = caseData?.status || "";
++  }, [caseData?.status]);
++
++  useEffect(() => {
++    let timer: number | undefined;
++    let cancelled = false;
++    const poll = async () => {
++      if (cancelled) return;
++      await fetchCase(true);
++      const status = statusRef.current.toUpperCase();
++      const slow = status === "RUNNING" || status === "FAILED" || status === "FINISHED";
++      const delay = slow ? 5000 : 2000;
++      timer = window.setTimeout(poll, delay);
++    };
++    poll();
++    return () => {
++      cancelled = true;
++      if (timer) window.clearTimeout(timer);
++    };
++  }, [fetchCase]);
++
++  useEffect(() => {
++    if (flashCaseId) {
++      const timer = window.setTimeout(() => clearFlash(), 4000);
++      return () => window.clearTimeout(timer);
++    }
++    return undefined;
++  }, [flashCaseId, clearFlash]);
++
++  const runtime = caseData?.runtime || {};
++  const envKeys = caseData?.env_keys || [];
++  const errorCode = caseData?.error_code || undefined;
++  const errorMessage = caseData?.error_message || undefined;
++
++  return (
++    <div className="detail">
++      <div className="detail-head">
++        <button className="ghost" onClick={onBack}>
++          返回
++        </button>
++        <div className="case-id">案例：{caseId}</div>
++        <button className="ghost" onClick={() => fetchCase()} disabled={loading}>
++          {loading ? "刷新中..." : "刷新状态"}
++        </button>
++      </div>
++      {flashCaseId ? <div className="success-banner">创建成功：{flashCaseId}</div> : null}
++      {loadError ? <div className="error-banner">{loadError}</div> : null}
++      <div className="detail-grid">
++        <section className="card" style={{ animationDelay: "0.05s" }}>
++          <div className="section-title">状态</div>
++          <div className="status-row">
++            <span className={`badge badge--${statusTone(caseData?.status)}`}>
++              {statusLabel(caseData?.status)}
++            </span>
++            <span className="stage">阶段：{stageLabel(caseData?.stage)}</span>
++          </div>
++          <div className="meta">
++            <div>更新时间：{formatTime(caseData?.updated_at)}</div>
++            <div>创建时间：{formatTime(caseData?.created_at)}</div>
++            <div>提交：{caseData?.commit_sha || "-"}</div>
++          </div>
++        </section>
++        <section className="card" style={{ animationDelay: "0.12s" }}>
++          <div className="section-title">运行信息</div>
++          <div className="runtime">
++            <div className="runtime-row">
++              <span>访问地址</span>
++              {runtime.access_url ? (
++                <div className="runtime-actions">
++                  <a href={runtime.access_url} target="_blank" rel="noreferrer">
++                    {runtime.access_url}
++                  </a>
++                  <CopyButton value={runtime.access_url} />
++                </div>
++              ) : (
++                <span>-</span>
++              )}
++            </div>
++            <div className="runtime-row">
++              <span>主机端口</span>
++              <span>{runtime.host_port ?? "-"}</span>
++            </div>
++            <div className="runtime-row">
++              <span>容器 ID</span>
++              <span className="mono">{runtime.container_id ?? "-"}</span>
++            </div>
++          </div>
++        </section>
++        <section className="card" style={{ animationDelay: "0.18s" }}>
++          <div className="section-title">环境变量键</div>
++          {envKeys.length ? (
++            <div className="chips">
++              {envKeys.map((key) => (
++                <span key={key} className="chip">
++                  {key}
++                </span>
++              ))}
++            </div>
++          ) : (
++            <div className="muted">暂无 env 键名。</div>
++          )}
++        </section>
++        {caseData?.status?.toUpperCase() === "FAILED" ? (
++          <section className="card error-card" style={{ animationDelay: "0.24s" }}>
++            <div className="section-title">错误</div>
++            <div className="error-code">{errorCode || "UNKNOWN"}</div>
++            <div className="error-message">{errorMessage || "未知错误。"}</div>
++            <div className="error-hint">
++              {ERROR_EXPLAIN[errorCode || ""] || "请查看日志详情。"}
++            </div>
++          </section>
++        ) : null}
++        <section className="card logs" style={{ animationDelay: "0.3s" }}>
++          <LogPanel caseId={caseId} />
++        </section>
++      </div>
++    </div>
++  );
++}
++
++function CopyButton({ value }: { value: string }) {
++  const [copied, setCopied] = useState(false);
++
++  const handleCopy = async () => {
++    try {
++      await navigator.clipboard.writeText(value);
++      setCopied(true);
++      setTimeout(() => setCopied(false), 1500);
++    } catch (err) {
++      setCopied(false);
++    }
++  };
++
++  return (
++    <button className="ghost" type="button" onClick={handleCopy}>
++      {copied ? "已复制" : "复制"}
++    </button>
++  );
++}
++
++function LogPanel({ caseId }: { caseId: string }) {
++  const [logs, setLogs] = useState<LogEntry[]>([]);
++  const [autoScroll, setAutoScroll] = useState(true);
++  const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">(
++    "connecting"
++  );
++  const [filters, setFilters] = useState({
++    build: true,
++    run: true,
++    analyze: true,
++    system: true,
++  });
++  const wsRef = useRef<WebSocket | null>(null);
++  const bottomRef = useRef<HTMLDivElement | null>(null);
++
++  const wsUrl = joinUrl(toWsUrl(API_BASE), `/ws/logs/${caseId}`);
++
++  const connect = useCallback(() => {
++    if (wsRef.current) {
++      wsRef.current.close();
++    }
++    setStatus("connecting");
++    const ws = new WebSocket(wsUrl);
++    wsRef.current = ws;
++    ws.onopen = () => setStatus("open");
++    ws.onclose = () => setStatus("closed");
++    ws.onerror = () => setStatus("error");
++    ws.onmessage = (event) => {
++      let parsed: LogEntry = {
++        ts: Date.now() / 1000,
++        stream: "system",
++        level: "INFO",
++        line: String(event.data || ""),
++      };
++      try {
++        const data = JSON.parse(event.data as string);
++        if (data && typeof data === "object") {
++          parsed = {
++            ts: data.ts ?? parsed.ts,
++            stream: data.stream ?? parsed.stream,
++            level: data.level ?? parsed.level,
++            line: data.line ?? parsed.line,
++          };
++        }
++      } catch (err) {
++        parsed = {
++          ...parsed,
++          line: String(event.data || ""),
++        };
++      }
++      setLogs((prev) => {
++        const next = [...prev, parsed];
++        if (next.length > 2000) {
++          return next.slice(-2000);
++        }
++        return next;
++      });
++    };
++  }, [wsUrl]);
++
++  useEffect(() => {
++    setLogs([]);
++    connect();
++    return () => {
++      if (wsRef.current) {
++        wsRef.current.close();
++      }
++    };
++  }, [connect, caseId]);
++
++  useEffect(() => {
++    if (!autoScroll) return;
++    if (bottomRef.current) {
++      bottomRef.current.scrollIntoView({ behavior: "auto" });
++    }
++  }, [logs, autoScroll]);
++
++  const visibleLogs = useMemo(() => {
++    return logs.filter((entry) => {
++      const key = entry.stream as keyof typeof filters;
++      if (filters[key] === undefined) return true;
++      return filters[key];
++    });
++  }, [logs, filters]);
++
++  return (
++    <div className="logs-panel">
++      <div className="logs-header">
++        <div>
++          <div className="section-title">日志</div>
++          <div className={`ws-status ws-${status}`}>
++            {status === "open" ? "已连接" : status === "connecting" ? "连接中" : "已断开"}
++          </div>
++        </div>
++        <div className="logs-actions">
++          <button className="ghost" type="button" onClick={() => setAutoScroll((value) => !value)}>
++            {autoScroll ? "暂停滚动" : "自动滚动"}
++          </button>
++          <button className="ghost" type="button" onClick={connect}>
++            重连
++          </button>
++        </div>
++      </div>
++      <div className="filters">
++        {(
++          [
++            { id: "build", label: "构建" },
++            { id: "run", label: "运行" },
++            { id: "analyze", label: "分析" },
++            { id: "system", label: "系统" },
++          ] as const
++        ).map((item) => (
++          <label key={item.id} className="filter">
++            <input
++              type="checkbox"
++              checked={filters[item.id]}
++              onChange={() =>
++                setFilters((prev) => ({
++                  ...prev,
++                  [item.id]: !prev[item.id],
++                }))
++              }
++            />
++            <span>{item.label}</span>
++          </label>
++        ))}
++      </div>
++      <div className="log-list">
++        {visibleLogs.length ? (
++          visibleLogs.map((entry, index) => (
++            <div className={`log-line level-${entry.level?.toLowerCase()}`} key={`${index}-${entry.ts}`}>
++              <span className="log-ts">{typeof entry.ts === "number" ? formatTime(entry.ts) : entry.ts}</span>
++              <span className={`log-stream stream-${entry.stream}`}>{streamLabel(entry.stream)}</span>
++              <span className="log-msg">{entry.line}</span>
++            </div>
++          ))
++        ) : (
++          <div className="muted">暂无日志。</div>
++        )}
++        <div ref={bottomRef} />
++      </div>
++    </div>
++  );
++}
++
++export default App;
+--- frontend/src/styles.css
++++ frontend/src/styles.css
+@@ -0,0 +1,600 @@
++@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap");
++
++:root {
++  --bg: #f7f0e6;
++  --bg-strong: #efe2d0;
++  --ink: #1f1b16;
++  --muted: #6b5f52;
++  --accent: #1e6f7a;
++  --accent-strong: #16555e;
++  --accent-warm: #e07a5f;
++  --card: #ffffffcc;
++  --border: #e2d1bf;
++  --shadow: 0 16px 40px rgba(34, 24, 16, 0.08);
++}
++
++* {
++  box-sizing: border-box;
++}
++
++body {
++  margin: 0;
++  font-family: "Space Grotesk", "Helvetica Neue", "Noto Sans", sans-serif;
++  color: var(--ink);
++  background-color: var(--bg);
++  min-height: 100vh;
++  background-image:
++    radial-gradient(circle at 20% 20%, rgba(224, 122, 95, 0.16), transparent 55%),
++    radial-gradient(circle at 80% 10%, rgba(30, 111, 122, 0.14), transparent 50%),
++    linear-gradient(160deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0.1));
++}
++
++body::before,
++body::after {
++  content: "";
++  position: fixed;
++  inset: 0;
++  pointer-events: none;
++}
++
++body::before {
++  background-image: radial-gradient(rgba(31, 27, 22, 0.05) 1px, transparent 1px);
++  background-size: 22px 22px;
++  opacity: 0.45;
++}
++
++body::after {
++  background: linear-gradient(120deg, rgba(30, 111, 122, 0.12), transparent 60%);
++  opacity: 0.5;
++}
++
++.app {
++  min-height: 100vh;
++  position: relative;
++}
++
++.topbar {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  padding: 24px 32px;
++  border-bottom: 1px solid var(--border);
++  backdrop-filter: blur(6px);
++}
++
++.brand {
++  display: flex;
++  align-items: center;
++  gap: 16px;
++}
++
++.brand-mark {
++  width: 48px;
++  height: 48px;
++  border-radius: 16px;
++  background: linear-gradient(130deg, var(--accent), var(--accent-warm));
++  color: white;
++  display: grid;
++  place-items: center;
++  font-weight: 700;
++  letter-spacing: 1px;
++}
++
++.brand-title {
++  font-size: 20px;
++  font-weight: 700;
++}
++
++.brand-sub {
++  color: var(--muted);
++  font-size: 14px;
++}
++
++.topbar-actions {
++  display: flex;
++  gap: 12px;
++}
++
++.main {
++  max-width: 1200px;
++  margin: 0 auto;
++  padding: 32px;
++  animation: fadeIn 0.5s ease;
++}
++
++@keyframes fadeIn {
++  from {
++    opacity: 0;
++    transform: translateY(6px);
++  }
++  to {
++    opacity: 1;
++    transform: translateY(0);
++  }
++}
++
++.card {
++  background: var(--card);
++  border: 1px solid var(--border);
++  border-radius: 20px;
++  padding: 24px;
++  box-shadow: var(--shadow);
++  animation: floatIn 0.6s ease both;
++}
++
++.card-hero {
++  border: 1px solid rgba(30, 111, 122, 0.25);
++}
++
++.card-glow {
++  background: linear-gradient(150deg, rgba(255, 255, 255, 0.9), rgba(244, 234, 220, 0.9));
++}
++
++@keyframes floatIn {
++  from {
++    opacity: 0;
++    transform: translateY(12px);
++  }
++  to {
++    opacity: 1;
++    transform: translateY(0);
++  }
++}
++
++.section-title {
++  font-size: 18px;
++  font-weight: 600;
++  margin-bottom: 8px;
++}
++
++.section-sub {
++  color: var(--muted);
++  margin-bottom: 20px;
++}
++
++.create-grid {
++  display: grid;
++  grid-template-columns: 2fr 1fr;
++  gap: 24px;
++}
++
++.form {
++  display: flex;
++  flex-direction: column;
++  gap: 16px;
++}
++
++.field {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++  font-size: 14px;
++  color: var(--muted);
++}
++
++.field input {
++  padding: 12px 14px;
++  border-radius: 12px;
++  border: 1px solid var(--border);
++  font-size: 15px;
++}
++
++.field-row {
++  display: grid;
++  grid-template-columns: 1fr auto;
++  gap: 12px;
++  align-items: end;
++}
++
++.checkbox {
++  align-items: center;
++  flex-direction: row;
++  gap: 12px;
++}
++
++.checkbox input {
++  width: 20px;
++  height: 20px;
++}
++
++.env-block {
++  background: rgba(244, 234, 220, 0.6);
++  border-radius: 16px;
++  padding: 16px;
++  border: 1px dashed rgba(30, 111, 122, 0.2);
++  display: flex;
++  flex-direction: column;
++  gap: 12px;
++}
++
++.env-header {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++}
++
++.env-title {
++  font-weight: 600;
++}
++
++.env-sub {
++  color: var(--muted);
++  font-size: 13px;
++}
++
++.env-row {
++  display: grid;
++  grid-template-columns: 1fr 1fr auto;
++  gap: 8px;
++}
++
++.env-row input {
++  padding: 10px 12px;
++  border-radius: 10px;
++  border: 1px solid var(--border);
++}
++
++button {
++  font-family: "Space Grotesk", "Helvetica Neue", sans-serif;
++  border: none;
++  cursor: pointer;
++}
++
++button.primary {
++  background: var(--accent);
++  color: white;
++  padding: 12px 18px;
++  border-radius: 12px;
++  font-weight: 600;
++  transition: background 0.2s ease;
++}
++
++button.primary:hover {
++  background: var(--accent-strong);
++}
++
++button.ghost {
++  background: transparent;
++  color: var(--accent-strong);
++  border: 1px solid rgba(30, 111, 122, 0.3);
++  padding: 8px 14px;
++  border-radius: 999px;
++}
++
++button.danger {
++  background: rgba(224, 122, 95, 0.12);
++  color: #8d3b2a;
++  border: 1px solid rgba(224, 122, 95, 0.4);
++  padding: 8px 10px;
++  border-radius: 10px;
++}
++
++button:disabled {
++  opacity: 0.6;
++  cursor: not-allowed;
++}
++
++.list {
++  margin: 0;
++  padding-left: 18px;
++  color: var(--muted);
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++}
++
++.note {
++  margin-top: 24px;
++  background: rgba(30, 111, 122, 0.08);
++  padding: 16px;
++  border-radius: 14px;
++}
++
++.note-title {
++  font-weight: 600;
++  margin-bottom: 6px;
++}
++
++.note-body {
++  color: var(--muted);
++  font-size: 14px;
++}
++
++.detail {
++  display: flex;
++  flex-direction: column;
++  gap: 20px;
++}
++
++.detail-head {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++}
++
++.case-id {
++  font-weight: 600;
++  font-size: 16px;
++}
++
++.detail-grid {
++  display: grid;
++  grid-template-columns: repeat(12, 1fr);
++  gap: 20px;
++}
++
++.detail-grid > .card {
++  grid-column: span 4;
++}
++
++.detail-grid > .card.logs,
++.detail-grid > .card.error-card {
++  grid-column: span 12;
++}
++
++.detail-grid > .card:nth-child(1) {
++  grid-column: span 4;
++}
++
++.detail-grid > .card:nth-child(2) {
++  grid-column: span 4;
++}
++
++.detail-grid > .card:nth-child(3) {
++  grid-column: span 4;
++}
++
++.status-row {
++  display: flex;
++  align-items: center;
++  gap: 12px;
++  margin-bottom: 12px;
++}
++
++.badge {
++  padding: 6px 12px;
++  border-radius: 999px;
++  font-size: 13px;
++  font-weight: 600;
++  text-transform: uppercase;
++}
++
++.badge--running {
++  background: rgba(30, 111, 122, 0.2);
++  color: var(--accent-strong);
++}
++
++.badge--working {
++  background: rgba(224, 122, 95, 0.18);
++  color: #8d3b2a;
++}
++
++.badge--failed {
++  background: rgba(186, 53, 36, 0.18);
++  color: #8d1f12;
++}
++
++.badge--finished {
++  background: rgba(120, 140, 90, 0.2);
++  color: #2f4b24;
++}
++
++.badge--neutral {
++  background: rgba(107, 95, 82, 0.2);
++  color: var(--muted);
++}
++
++.stage {
++  color: var(--muted);
++}
++
++.meta {
++  display: grid;
++  gap: 4px;
++  color: var(--muted);
++  font-size: 14px;
++}
++
++.runtime {
++  display: grid;
++  gap: 12px;
++}
++
++.runtime-row {
++  display: flex;
++  justify-content: space-between;
++  gap: 12px;
++  color: var(--muted);
++}
++
++.runtime-actions {
++  display: flex;
++  gap: 8px;
++  align-items: center;
++}
++
++.runtime-actions a {
++  color: var(--accent-strong);
++  text-decoration: none;
++}
++
++.chips {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 8px;
++}
++
++.chip {
++  background: rgba(30, 111, 122, 0.16);
++  color: var(--accent-strong);
++  padding: 6px 10px;
++  border-radius: 999px;
++  font-size: 13px;
++}
++
++.error-card {
++  border: 1px solid rgba(186, 53, 36, 0.3);
++  background: rgba(255, 236, 234, 0.9);
++}
++
++.error-code {
++  font-size: 20px;
++  font-weight: 700;
++}
++
++.error-message {
++  margin-top: 8px;
++  color: #8d1f12;
++}
++
++.error-hint {
++  margin-top: 8px;
++  color: var(--muted);
++}
++
++.logs {
++  padding: 0;
++}
++
++.logs-panel {
++  display: flex;
++  flex-direction: column;
++  gap: 12px;
++}
++
++.logs-header {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  padding: 24px 24px 0;
++}
++
++.logs-actions {
++  display: flex;
++  gap: 10px;
++}
++
++.filters {
++  display: flex;
++  gap: 12px;
++  padding: 0 24px;
++  flex-wrap: wrap;
++}
++
++.filter {
++  display: flex;
++  gap: 6px;
++  align-items: center;
++  font-size: 13px;
++  color: var(--muted);
++}
++
++.log-list {
++  background: #1d1914;
++  color: #f5efe6;
++  border-radius: 0 0 20px 20px;
++  padding: 18px 24px 24px;
++  font-family: "IBM Plex Mono", "Courier New", monospace;
++  max-height: 360px;
++  overflow-y: auto;
++}
++
++.log-line {
++  display: grid;
++  grid-template-columns: 160px 80px 1fr;
++  gap: 12px;
++  font-size: 12px;
++  padding: 4px 0;
++}
++
++.log-ts {
++  color: #a9a096;
++}
++
++.log-stream {
++  text-transform: uppercase;
++  font-size: 11px;
++  padding: 2px 8px;
++  border-radius: 999px;
++  justify-self: start;
++  background: rgba(255, 255, 255, 0.1);
++}
++
++.log-msg {
++  white-space: pre-wrap;
++}
++
++.ws-status {
++  font-size: 12px;
++  color: var(--muted);
++}
++
++.ws-open {
++  color: #b6f2db;
++}
++
++.ws-connecting {
++  color: #ffd580;
++}
++
++.ws-closed,
++.ws-error {
++  color: #f2a7a0;
++}
++
++.muted {
++  color: var(--muted);
++}
++
++.mono {
++  font-family: "IBM Plex Mono", "Courier New", monospace;
++}
++
++.error-banner,
++.success-banner {
++  padding: 12px 16px;
++  border-radius: 12px;
++  font-size: 14px;
++}
++
++.error-banner {
++  background: rgba(186, 53, 36, 0.12);
++  border: 1px solid rgba(186, 53, 36, 0.3);
++  color: #8d1f12;
++}
++
++.success-banner {
++  background: rgba(30, 111, 122, 0.12);
++  border: 1px solid rgba(30, 111, 122, 0.3);
++  color: var(--accent-strong);
++}
++
++@media (max-width: 980px) {
++  .create-grid {
++    grid-template-columns: 1fr;
++  }
++
++  .detail-grid {
++    grid-template-columns: 1fr;
++  }
++
++  .detail-grid > .card {
++    grid-column: span 12;
++  }
++
++  .topbar {
++    flex-direction: column;
++    gap: 16px;
++    align-items: flex-start;
++  }
++
++  .detail-head {
++    flex-direction: column;
++    align-items: flex-start;
++    gap: 12px;
++  }
++
++  .log-line {
++    grid-template-columns: 1fr;
++  }
++}

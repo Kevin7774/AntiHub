@@ -1,0 +1,1812 @@
+{
+  "results": [
+    {
+      "name": "multi_stage_stage_ref",
+      "payload": {
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/multi-stage-stage-ref"
+      },
+      "case_id": "c_c07c24",
+      "status": {
+        "case_id": "c_c07c24",
+        "status": "RUNNING",
+        "stage": "run",
+        "mode": "deploy",
+        "commit_sha": null,
+        "resolved_ref": null,
+        "runtime": {
+          "container_id": "898b59fc23e20ba500db68cec775d24eac3e2a5596a522e4d0aec37f2b5a931a",
+          "host_port": 30000,
+          "access_url": "http://localhost:30000",
+          "url": "http://localhost:30000",
+          "started_at": 1769444957.4712715,
+          "exited_at": null,
+          "exit_code": null
+        },
+        "env_keys": [],
+        "error_code": null,
+        "error_message": null,
+        "created_at": 1769444948.6188989,
+        "updated_at": 1769444957.4712746,
+        "archived": false,
+        "archived_at": null,
+        "attempt": 1,
+        "retry_of": null,
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/multi-stage-stage-ref",
+        "ref": null,
+        "branch": null,
+        "container_port": 80,
+        "dockerfile_path": null,
+        "context_path": null,
+        "resolved_dockerfile_path": "Dockerfile",
+        "resolved_context_path": ".",
+        "docker_build_network": "default",
+        "docker_no_cache": false,
+        "build_arg_keys": [],
+        "git_submodules": false,
+        "git_lfs": false,
+        "container_id": "898b59fc23e20ba500db68cec775d24eac3e2a5596a522e4d0aec37f2b5a931a",
+        "host_port": 30000,
+        "access_url": "http://localhost:30000",
+        "image_tag": "case-c_c07c24:latest",
+        "last_log_at": 1769444957.4975145,
+        "report_ready": false,
+        "manual_status": "SUCCESS",
+        "manual_generated_at": 1769444948.6740909,
+        "manual_error_code": null,
+        "manual_error_message": null,
+        "manual_meta": {
+          "generated_at": 1769444948.6740909,
+          "generator_version": "v0.4",
+          "repo_fingerprint": "ecf5140dc1",
+          "similarity_score": 0.122,
+          "warnings": [],
+          "signals": {
+            "repo_kind": "docker",
+            "readme_title": "",
+            "readme_summary": "",
+            "has_readme": false,
+            "has_dockerfile": true,
+            "docker_info": {
+              "base": "app-base AS final",
+              "expose": null,
+              "cmd": "CMD [\"sh\", \"-c\", \"echo hello && sleep 2\"]",
+              "entrypoint": null,
+              "env_keys": [],
+              "arg_keys": []
+            },
+            "config_files": [],
+            "package_scripts": [],
+            "python_entrypoints": [],
+            "env_candidates": [],
+            "key_paths": [
+              [
+                "Dockerfile",
+                "容器构建入口"
+              ]
+            ],
+            "tree_depth": 2,
+            "file_count": 1
+          },
+          "time_cost_ms": 0
+        },
+        "preflight_meta": {
+          "stages": [
+            "app-base",
+            "final"
+          ],
+          "external_images_to_pull": [
+            "alpine:3.19"
+          ],
+          "warnings": [
+            "BUILDKIT_NETWORK_BRIDGE_UNSUPPORTED: using default"
+          ],
+          "dockerfile_path": "Dockerfile",
+          "context_path": ".",
+          "candidates": []
+        }
+      },
+      "manual_status": null,
+      "logs": [
+        {
+          "ts": 1769444948.6310828,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Cloning repo /home/user2643/code/AntiHub/test-repos/multi-stage-stage-ref (ref auto)..."
+        },
+        {
+          "ts": 1769444948.6376097,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Clone completed"
+        },
+        {
+          "ts": 1769444948.6631043,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Resolving Dockerfile"
+        },
+        {
+          "ts": 1769444948.6662343,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Dockerfile auto-selected: Dockerfile (candidates=['Dockerfile'])"
+        },
+        {
+          "ts": 1769444948.6703532,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation started"
+        },
+        {
+          "ts": 1769444948.680623,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation finished time_cost_ms=0 warnings=none"
+        },
+        {
+          "ts": 1769444948.6861916,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] stages=['app-base', 'final']"
+        },
+        {
+          "ts": 1769444948.6892707,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] external_images_to_pull=['alpine:3.19']"
+        },
+        {
+          "ts": 1769444948.6929605,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] warnings=['BUILDKIT_NETWORK_BRIDGE_UNSUPPORTED: using default']"
+        },
+        {
+          "ts": 1769444948.696547,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[pull] Pulling base image alpine:3.19"
+        },
+        {
+          "ts": 1769444956.4980586,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[build] docker build (context=., dockerfile=Dockerfile, network=default, no_cache=False, buildkit=True)"
+        },
+        {
+          "ts": 1769444956.8688917,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#0 building with \"default\" instance using docker driver"
+        },
+        {
+          "ts": 1769444956.8733122,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#1 [internal] load build definition from Dockerfile"
+        },
+        {
+          "ts": 1769444956.8764155,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#1 transferring dockerfile: 146B done"
+        },
+        {
+          "ts": 1769444956.879388,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#1 DONE 0.0s"
+        },
+        {
+          "ts": 1769444956.8832433,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#2 [internal] load metadata for docker.io/library/alpine:3.19"
+        },
+        {
+          "ts": 1769444956.8871682,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#2 DONE 0.0s"
+        },
+        {
+          "ts": 1769444956.896291,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#3 [internal] load .dockerignore"
+        },
+        {
+          "ts": 1769444956.903171,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#3 transferring context: 2B done"
+        },
+        {
+          "ts": 1769444956.9092288,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#3 DONE 0.0s"
+        },
+        {
+          "ts": 1769444956.9168978,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#4 [app-base 1/2] FROM docker.io/library/alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1"
+        },
+        {
+          "ts": 1769444956.9223988,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#4 resolve docker.io/library/alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 0.0s done"
+        },
+        {
+          "ts": 1769444956.9277651,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#4 DONE 0.0s"
+        },
+        {
+          "ts": 1769444956.9334462,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#5 [app-base 2/2] RUN echo base"
+        },
+        {
+          "ts": 1769444956.9385164,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#5 CACHED"
+        },
+        {
+          "ts": 1769444956.945545,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 exporting to image"
+        },
+        {
+          "ts": 1769444956.951462,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 exporting layers done"
+        },
+        {
+          "ts": 1769444956.957692,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 exporting manifest sha256:2303caae88c8eddaf81495f5b60dc73684ae569f4c1beedafe05354863cbd0dd done"
+        },
+        {
+          "ts": 1769444956.9634688,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 exporting config sha256:04e182ca6877008ecdd7b9ce764cd7172ebd0381979a2e4b94f29283cadbab2a done"
+        },
+        {
+          "ts": 1769444956.9692388,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 exporting attestation manifest sha256:45e09bba10cade742b2505c5b89a8970366dfedcd70c95799a946f5a4fa2514e 0.0s done"
+        },
+        {
+          "ts": 1769444956.9742188,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 exporting manifest list sha256:04239588e482441246ca49b68557416822ad2bddb1da2e8d15d1b716c667605d done"
+        },
+        {
+          "ts": 1769444956.9791331,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 naming to docker.io/library/case-c_c07c24:latest"
+        },
+        {
+          "ts": 1769444956.9853766,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 naming to docker.io/library/case-c_c07c24:latest done"
+        },
+        {
+          "ts": 1769444956.9896743,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 unpacking to docker.io/library/case-c_c07c24:latest done"
+        },
+        {
+          "ts": 1769444956.9932346,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 DONE 0.0s"
+        },
+        {
+          "ts": 1769444957.4734159,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[run] Container started: http://localhost:30000"
+        },
+        {
+          "ts": 1769444957.4975145,
+          "stream": "run",
+          "level": "INFO",
+          "line": "hello"
+        }
+      ],
+      "duration_ms": 10028,
+      "error_code": null,
+      "pass": true
+    },
+    {
+      "name": "buildkit_required_pass",
+      "payload": {
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/buildkit-required",
+        "build": {
+          "use_buildkit": true
+        }
+      },
+      "case_id": "c_eff3ff",
+      "status": {
+        "case_id": "c_eff3ff",
+        "status": "FINISHED",
+        "stage": "run",
+        "mode": "deploy",
+        "commit_sha": null,
+        "resolved_ref": null,
+        "runtime": {
+          "container_id": "2cda6cadae3e88c96abb008c56466c0995fa95de103e8d4f8da4eca7c2d5fa70",
+          "host_port": 30000,
+          "access_url": "http://localhost:30000",
+          "url": "http://localhost:30000",
+          "started_at": 1769444972.7272062,
+          "exited_at": 1769444974.091786,
+          "exit_code": 0
+        },
+        "env_keys": [],
+        "error_code": null,
+        "error_message": null,
+        "created_at": 1769444958.6464727,
+        "updated_at": 1769444974.0939498,
+        "archived": false,
+        "archived_at": null,
+        "attempt": 1,
+        "retry_of": null,
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/buildkit-required",
+        "ref": null,
+        "branch": null,
+        "container_port": 80,
+        "dockerfile_path": null,
+        "context_path": null,
+        "resolved_dockerfile_path": "Dockerfile",
+        "resolved_context_path": ".",
+        "docker_build_network": "default",
+        "docker_no_cache": false,
+        "build_arg_keys": [],
+        "git_submodules": false,
+        "git_lfs": false,
+        "container_id": "2cda6cadae3e88c96abb008c56466c0995fa95de103e8d4f8da4eca7c2d5fa70",
+        "host_port": 30000,
+        "access_url": "http://localhost:30000",
+        "image_tag": "case-c_eff3ff:latest",
+        "last_log_at": 1769444974.0957053,
+        "report_ready": false,
+        "manual_status": "SUCCESS",
+        "manual_generated_at": 1769444958.6855268,
+        "manual_error_code": null,
+        "manual_error_message": null,
+        "manual_meta": {
+          "generated_at": 1769444958.6855268,
+          "generator_version": "v0.4",
+          "repo_fingerprint": "ecf5140dc1",
+          "similarity_score": 0.124,
+          "warnings": [],
+          "signals": {
+            "repo_kind": "docker",
+            "readme_title": "",
+            "readme_summary": "",
+            "has_readme": false,
+            "has_dockerfile": true,
+            "docker_info": {
+              "base": "alpine:3.19",
+              "expose": null,
+              "cmd": "CMD [\"sh\", \"-c\", \"echo ok && sleep 1\"]",
+              "entrypoint": null,
+              "env_keys": [],
+              "arg_keys": []
+            },
+            "config_files": [],
+            "package_scripts": [],
+            "python_entrypoints": [],
+            "env_candidates": [],
+            "key_paths": [
+              [
+                "Dockerfile",
+                "容器构建入口"
+              ]
+            ],
+            "tree_depth": 2,
+            "file_count": 1
+          },
+          "time_cost_ms": 0
+        },
+        "preflight_meta": {
+          "stages": [],
+          "external_images_to_pull": [
+            "alpine:3.19"
+          ],
+          "warnings": [
+            "BUILDKIT_NETWORK_BRIDGE_UNSUPPORTED: using default"
+          ],
+          "dockerfile_path": "Dockerfile",
+          "context_path": ".",
+          "candidates": []
+        }
+      },
+      "manual_status": null,
+      "logs": [
+        {
+          "ts": 1769444958.6557834,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Cloning repo /home/user2643/code/AntiHub/test-repos/buildkit-required (ref auto)..."
+        },
+        {
+          "ts": 1769444958.6610987,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Clone completed"
+        },
+        {
+          "ts": 1769444958.672706,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Resolving Dockerfile"
+        },
+        {
+          "ts": 1769444958.6764927,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Dockerfile auto-selected: Dockerfile (candidates=['Dockerfile'])"
+        },
+        {
+          "ts": 1769444958.681721,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation started"
+        },
+        {
+          "ts": 1769444958.6917691,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation finished time_cost_ms=0 warnings=none"
+        },
+        {
+          "ts": 1769444958.6993237,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] stages=[]"
+        },
+        {
+          "ts": 1769444958.7024937,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] external_images_to_pull=['alpine:3.19']"
+        },
+        {
+          "ts": 1769444958.7058218,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] warnings=['BUILDKIT_NETWORK_BRIDGE_UNSUPPORTED: using default']"
+        },
+        {
+          "ts": 1769444958.7095518,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[pull] Pulling base image alpine:3.19"
+        },
+        {
+          "ts": 1769444966.992647,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[build] docker build (context=., dockerfile=Dockerfile, network=default, no_cache=False, buildkit=True)"
+        },
+        {
+          "ts": 1769444967.406401,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#0 building with \"default\" instance using docker driver"
+        },
+        {
+          "ts": 1769444967.4112375,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#1 [internal] load build definition from Dockerfile"
+        },
+        {
+          "ts": 1769444967.4143753,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#1 transferring dockerfile: 211B done"
+        },
+        {
+          "ts": 1769444967.4177732,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#1 DONE 0.0s"
+        },
+        {
+          "ts": 1769444967.4206064,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#2 resolve image config for docker-image://docker.io/docker/dockerfile:1.4"
+        },
+        {
+          "ts": 1769444971.9607136,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#2 DONE 4.7s"
+        },
+        {
+          "ts": 1769444972.0633433,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#3 docker-image://docker.io/docker/dockerfile:1.4@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc"
+        },
+        {
+          "ts": 1769444972.0670867,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#3 resolve docker.io/docker/dockerfile:1.4@sha256:9ba7531bd80fb0a858632727cf7a112fbfd19b17e94c4e84ced81e24ef1a0dbc 0.0s done"
+        },
+        {
+          "ts": 1769444972.0701594,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#3 CACHED"
+        },
+        {
+          "ts": 1769444972.1681538,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#4 [internal] load .dockerignore"
+        },
+        {
+          "ts": 1769444972.171756,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#4 transferring context: 2B done"
+        },
+        {
+          "ts": 1769444972.1743572,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#4 DONE 0.0s"
+        },
+        {
+          "ts": 1769444972.1780407,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#5 [internal] load metadata for docker.io/library/alpine:3.19"
+        },
+        {
+          "ts": 1769444972.1816013,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#5 DONE 0.0s"
+        },
+        {
+          "ts": 1769444972.1855996,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 [stage-0 1/2] FROM docker.io/library/alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1"
+        },
+        {
+          "ts": 1769444972.1932573,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 resolve docker.io/library/alpine:3.19@sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1 0.0s done"
+        },
+        {
+          "ts": 1769444972.2004688,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 DONE 0.0s"
+        },
+        {
+          "ts": 1769444972.206843,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#7 [stage-0 2/2] RUN --mount=type=cache,target=/root/.cache echo \"buildkit cache\" > /root/.cache/demo"
+        },
+        {
+          "ts": 1769444972.2133956,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#7 CACHED"
+        },
+        {
+          "ts": 1769444972.2182806,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting to image"
+        },
+        {
+          "ts": 1769444972.223367,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting layers done"
+        },
+        {
+          "ts": 1769444972.229856,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting manifest sha256:5f83355cc69311f3e3bf1bed8115a45b5af1a7cb79f71e43ba0208a6082c43ef done"
+        },
+        {
+          "ts": 1769444972.2352114,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting config sha256:2bb46e0b6dd734c14e52234749c10cafc148bf5d39f2d670d20bd6f7e3f6f142 done"
+        },
+        {
+          "ts": 1769444972.2420805,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting attestation manifest sha256:ea9b1eb9f3c8706f37b916e86d733ab31a3b8114197b3ef874b32e7515370e81 0.0s done"
+        },
+        {
+          "ts": 1769444972.246857,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting manifest list sha256:fb027b5f069c08b5a0f6eedb8e685a182f41f16bba620ae3d7a6cf6dbf6d6f30 done"
+        },
+        {
+          "ts": 1769444972.2523024,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 naming to docker.io/library/case-c_eff3ff:latest"
+        },
+        {
+          "ts": 1769444972.2782223,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 naming to docker.io/library/case-c_eff3ff:latest done"
+        },
+        {
+          "ts": 1769444972.2834125,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 unpacking to docker.io/library/case-c_eff3ff:latest done"
+        },
+        {
+          "ts": 1769444972.2866085,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 DONE 0.1s"
+        },
+        {
+          "ts": 1769444972.7302456,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[run] Container started: http://localhost:30000"
+        },
+        {
+          "ts": 1769444972.7600615,
+          "stream": "run",
+          "level": "INFO",
+          "line": "ok"
+        },
+        {
+          "ts": 1769444974.0957053,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Container exited with code 0"
+        }
+      ],
+      "duration_ms": 16077,
+      "error_code": null,
+      "pass": true
+    },
+    {
+      "name": "buildkit_required_fail_fast",
+      "payload": {
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/buildkit-required",
+        "build": {
+          "use_buildkit": false
+        }
+      },
+      "case_id": "c_4c58a5",
+      "status": {
+        "case_id": "c_4c58a5",
+        "status": "FAILED",
+        "stage": "build",
+        "mode": "deploy",
+        "commit_sha": null,
+        "resolved_ref": null,
+        "runtime": {
+          "container_id": null,
+          "host_port": null,
+          "access_url": null,
+          "url": null,
+          "started_at": null,
+          "exited_at": null,
+          "exit_code": null
+        },
+        "env_keys": [],
+        "error_code": "BUILDKIT_REQUIRED",
+        "error_message": "Docker BuildKit 未启用 请设置 DOCKER_BUILDKIT=1 或在 daemon.json 中开启 features.buildkit=true。 (detail: BuildKit is required for this Dockerfile. Enable DOCKER_BUILDKIT=1 or daemon features.buildkit=true.)",
+        "created_at": 1769444974.7235165,
+        "updated_at": 1769444974.7739718,
+        "archived": false,
+        "archived_at": null,
+        "attempt": 1,
+        "retry_of": null,
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/buildkit-required",
+        "ref": null,
+        "branch": null,
+        "container_port": 80,
+        "dockerfile_path": null,
+        "context_path": null,
+        "resolved_dockerfile_path": "Dockerfile",
+        "resolved_context_path": ".",
+        "docker_build_network": "bridge",
+        "docker_no_cache": false,
+        "build_arg_keys": [],
+        "git_submodules": false,
+        "git_lfs": false,
+        "container_id": null,
+        "host_port": null,
+        "access_url": null,
+        "image_tag": null,
+        "last_log_at": 1769444974.7754033,
+        "report_ready": false,
+        "manual_status": "SUCCESS",
+        "manual_generated_at": 1769444974.756804,
+        "manual_error_code": null,
+        "manual_error_message": null,
+        "manual_meta": {
+          "generated_at": 1769444974.756804,
+          "generator_version": "v0.4",
+          "repo_fingerprint": "ecf5140dc1",
+          "similarity_score": 0.124,
+          "warnings": [],
+          "signals": {
+            "repo_kind": "docker",
+            "readme_title": "",
+            "readme_summary": "",
+            "has_readme": false,
+            "has_dockerfile": true,
+            "docker_info": {
+              "base": "alpine:3.19",
+              "expose": null,
+              "cmd": "CMD [\"sh\", \"-c\", \"echo ok && sleep 1\"]",
+              "entrypoint": null,
+              "env_keys": [],
+              "arg_keys": []
+            },
+            "config_files": [],
+            "package_scripts": [],
+            "python_entrypoints": [],
+            "env_candidates": [],
+            "key_paths": [
+              [
+                "Dockerfile",
+                "容器构建入口"
+              ]
+            ],
+            "tree_depth": 2,
+            "file_count": 1
+          },
+          "time_cost_ms": 0
+        },
+        "preflight_meta": {
+          "stages": [],
+          "external_images_to_pull": [
+            "alpine:3.19"
+          ],
+          "warnings": [],
+          "dockerfile_path": "Dockerfile",
+          "context_path": ".",
+          "candidates": []
+        }
+      },
+      "manual_status": null,
+      "logs": [
+        {
+          "ts": 1769444974.7303646,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Cloning repo /home/user2643/code/AntiHub/test-repos/buildkit-required (ref auto)..."
+        },
+        {
+          "ts": 1769444974.7332478,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Clone completed"
+        },
+        {
+          "ts": 1769444974.7461052,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Resolving Dockerfile"
+        },
+        {
+          "ts": 1769444974.748446,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Dockerfile auto-selected: Dockerfile (candidates=['Dockerfile'])"
+        },
+        {
+          "ts": 1769444974.7535746,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation started"
+        },
+        {
+          "ts": 1769444974.7636442,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation finished time_cost_ms=0 warnings=none"
+        },
+        {
+          "ts": 1769444974.7680237,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] stages=[]"
+        },
+        {
+          "ts": 1769444974.7704394,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] external_images_to_pull=['alpine:3.19']"
+        },
+        {
+          "ts": 1769444974.7754033,
+          "stream": "system",
+          "level": "ERROR",
+          "line": "ERROR [BUILDKIT_REQUIRED]: Docker BuildKit 未启用 请设置 DOCKER_BUILDKIT=1 或在 daemon.json 中开启 features.buildkit=true。 (detail: BuildKit is required for this Dockerfile. Enable DOCKER_BUILDKIT=1 or daemon features.buildkit=true.)"
+        }
+      ],
+      "duration_ms": 2023,
+      "error_code": "BUILDKIT_REQUIRED",
+      "pass": true
+    },
+    {
+      "name": "dockerfile_subdir",
+      "payload": {
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/docker-subdir",
+        "dockerfile_path": "app/Dockerfile",
+        "context_path": "app"
+      },
+      "case_id": "c_e06c0e",
+      "status": {
+        "case_id": "c_e06c0e",
+        "status": "RUNNING",
+        "stage": "run",
+        "mode": "deploy",
+        "commit_sha": null,
+        "resolved_ref": null,
+        "runtime": {
+          "container_id": "6442a769f1f275086c54e850e61bdcd7e2c5d1863485e8e7fa4ccf95f4b64f08",
+          "host_port": 30000,
+          "access_url": "http://localhost:30000",
+          "url": "http://localhost:30000",
+          "started_at": 1769444990.6945457,
+          "exited_at": null,
+          "exit_code": null
+        },
+        "env_keys": [],
+        "error_code": null,
+        "error_message": null,
+        "created_at": 1769444976.7470124,
+        "updated_at": 1769444990.694549,
+        "archived": false,
+        "archived_at": null,
+        "attempt": 1,
+        "retry_of": null,
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/docker-subdir",
+        "ref": null,
+        "branch": null,
+        "container_port": 8000,
+        "dockerfile_path": "app/Dockerfile",
+        "context_path": "app",
+        "resolved_dockerfile_path": "app/Dockerfile",
+        "resolved_context_path": "app",
+        "docker_build_network": "default",
+        "docker_no_cache": false,
+        "build_arg_keys": [],
+        "git_submodules": false,
+        "git_lfs": false,
+        "container_id": "6442a769f1f275086c54e850e61bdcd7e2c5d1863485e8e7fa4ccf95f4b64f08",
+        "host_port": 30000,
+        "access_url": "http://localhost:30000",
+        "image_tag": "case-c_e06c0e:latest",
+        "last_log_at": 1769444990.6971414,
+        "report_ready": false,
+        "manual_status": "SUCCESS",
+        "manual_generated_at": 1769444976.7784202,
+        "manual_error_code": null,
+        "manual_error_message": null,
+        "manual_meta": {
+          "generated_at": 1769444976.7784202,
+          "generator_version": "v0.4",
+          "repo_fingerprint": "e10fa99d28",
+          "similarity_score": 0.135,
+          "warnings": [],
+          "signals": {
+            "repo_kind": "unknown",
+            "readme_title": "docker-subdir",
+            "readme_summary": "Dockerfile 位于子目录 app/。",
+            "has_readme": true,
+            "has_dockerfile": false,
+            "docker_info": {},
+            "config_files": [],
+            "package_scripts": [],
+            "python_entrypoints": [],
+            "env_candidates": [],
+            "key_paths": [
+              [
+                "app/",
+                "顶层目录/文件"
+              ],
+              [
+                "README.md",
+                "顶层目录/文件"
+              ]
+            ],
+            "tree_depth": 2,
+            "file_count": 3
+          },
+          "time_cost_ms": 0
+        },
+        "preflight_meta": {
+          "stages": [],
+          "external_images_to_pull": [
+            "python:3.11-slim"
+          ],
+          "warnings": [
+            "BUILDKIT_NETWORK_BRIDGE_UNSUPPORTED: using default"
+          ],
+          "dockerfile_path": "app/Dockerfile",
+          "context_path": "app",
+          "candidates": []
+        }
+      },
+      "manual_status": null,
+      "logs": [
+        {
+          "ts": 1769444976.753488,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Cloning repo /home/user2643/code/AntiHub/test-repos/docker-subdir (ref auto)..."
+        },
+        {
+          "ts": 1769444976.7571938,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Clone completed"
+        },
+        {
+          "ts": 1769444976.7680972,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Resolving Dockerfile"
+        },
+        {
+          "ts": 1769444976.770332,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Dockerfile path: app/Dockerfile"
+        },
+        {
+          "ts": 1769444976.7750385,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation started"
+        },
+        {
+          "ts": 1769444976.7843769,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation finished time_cost_ms=0 warnings=none"
+        },
+        {
+          "ts": 1769444976.7888172,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] stages=[]"
+        },
+        {
+          "ts": 1769444976.7919216,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] external_images_to_pull=['python:3.11-slim']"
+        },
+        {
+          "ts": 1769444976.794535,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] warnings=['BUILDKIT_NETWORK_BRIDGE_UNSUPPORTED: using default']"
+        },
+        {
+          "ts": 1769444976.7971714,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[pull] Pulling base image python:3.11-slim"
+        },
+        {
+          "ts": 1769444989.7493496,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[build] docker build (context=app, dockerfile=Dockerfile, network=default, no_cache=False, buildkit=True)"
+        },
+        {
+          "ts": 1769444990.087083,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#0 building with \"default\" instance using docker driver"
+        },
+        {
+          "ts": 1769444990.091082,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#1 [internal] load build definition from Dockerfile"
+        },
+        {
+          "ts": 1769444990.0937452,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#1 transferring dockerfile: 183B done"
+        },
+        {
+          "ts": 1769444990.0968149,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#1 DONE 0.0s"
+        },
+        {
+          "ts": 1769444990.1008563,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#2 [internal] load metadata for docker.io/library/python:3.11-slim"
+        },
+        {
+          "ts": 1769444990.1073494,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#2 DONE 0.0s"
+        },
+        {
+          "ts": 1769444990.1132975,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#3 [internal] load .dockerignore"
+        },
+        {
+          "ts": 1769444990.119083,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#3 transferring context: 2B done"
+        },
+        {
+          "ts": 1769444990.1247358,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#3 DONE 0.0s"
+        },
+        {
+          "ts": 1769444990.1295946,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#4 [internal] load build context"
+        },
+        {
+          "ts": 1769444990.1348267,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#4 transferring context: 32B done"
+        },
+        {
+          "ts": 1769444990.1405356,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#4 DONE 0.0s"
+        },
+        {
+          "ts": 1769444990.1453059,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#5 [1/3] FROM docker.io/library/python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2"
+        },
+        {
+          "ts": 1769444990.1517117,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#5 resolve docker.io/library/python:3.11-slim@sha256:5be45dbade29bebd6886af6b438fd7e0b4eb7b611f39ba62b430263f82de36d2 0.0s done"
+        },
+        {
+          "ts": 1769444990.1575036,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#5 DONE 0.0s"
+        },
+        {
+          "ts": 1769444990.1621385,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 [2/3] WORKDIR /app"
+        },
+        {
+          "ts": 1769444990.1672769,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#6 CACHED"
+        },
+        {
+          "ts": 1769444990.1714818,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#7 [3/3] COPY index.html /app/index.html"
+        },
+        {
+          "ts": 1769444990.1756654,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#7 CACHED"
+        },
+        {
+          "ts": 1769444990.179521,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting to image"
+        },
+        {
+          "ts": 1769444990.1842499,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting layers done"
+        },
+        {
+          "ts": 1769444990.188352,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting manifest sha256:4f9728ad8fae04221e17b7b1db89a7b7696dbb9484a823b0815f51478b4bd468 done"
+        },
+        {
+          "ts": 1769444990.1937578,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting config sha256:5ab362cd4cbd0e2a09fadf92f21257e3657f9cb9e83bd170fff8f1a6a014c97b done"
+        },
+        {
+          "ts": 1769444990.197658,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting attestation manifest sha256:154b4a0c11922cf1423af64cee59efc397a92aafcfd7a825153d05ba6a2326f5 0.0s done"
+        },
+        {
+          "ts": 1769444990.2009654,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 exporting manifest list sha256:cd0d729f06b6d35176b72d4c184899fc4e6177ee68bb19125718b071b45ae4db done"
+        },
+        {
+          "ts": 1769444990.2036731,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 naming to docker.io/library/case-c_e06c0e:latest done"
+        },
+        {
+          "ts": 1769444990.2061045,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 unpacking to docker.io/library/case-c_e06c0e:latest done"
+        },
+        {
+          "ts": 1769444990.208596,
+          "stream": "build",
+          "level": "INFO",
+          "line": "#8 DONE 0.1s"
+        },
+        {
+          "ts": 1769444990.6971414,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[run] Container started: http://localhost:30000"
+        }
+      ],
+      "duration_ms": 14038,
+      "error_code": null,
+      "pass": true
+    },
+    {
+      "name": "dockerfile_ambiguous",
+      "payload": {
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/docker-ambiguous"
+      },
+      "case_id": "c_56fdf8",
+      "status": {
+        "case_id": "c_56fdf8",
+        "status": "FAILED",
+        "stage": "clone",
+        "mode": "deploy",
+        "commit_sha": null,
+        "resolved_ref": null,
+        "runtime": {
+          "container_id": null,
+          "host_port": null,
+          "access_url": null,
+          "url": null,
+          "started_at": null,
+          "exited_at": null,
+          "exit_code": null
+        },
+        "env_keys": [],
+        "error_code": "DOCKERFILE_AMBIGUOUS",
+        "error_message": "Dockerfile 存在多个候选 请显式指定 dockerfile_path/context_path。 (detail: Multiple Dockerfile candidates found: Dockerfile, Dockerfile.dev)",
+        "created_at": 1769444990.7864408,
+        "updated_at": 1769444990.8258412,
+        "archived": false,
+        "archived_at": null,
+        "attempt": 1,
+        "retry_of": null,
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/docker-ambiguous",
+        "ref": null,
+        "branch": null,
+        "container_port": null,
+        "dockerfile_path": null,
+        "context_path": null,
+        "resolved_dockerfile_path": null,
+        "resolved_context_path": null,
+        "docker_build_network": null,
+        "docker_no_cache": null,
+        "build_arg_keys": [],
+        "git_submodules": null,
+        "git_lfs": null,
+        "container_id": null,
+        "host_port": null,
+        "access_url": null,
+        "image_tag": null,
+        "last_log_at": 1769444990.827207,
+        "report_ready": false,
+        "manual_status": "SUCCESS",
+        "manual_generated_at": 1769444990.8218246,
+        "manual_error_code": null,
+        "manual_error_message": null,
+        "manual_meta": {
+          "generated_at": 1769444990.8218246,
+          "generator_version": "v0.4",
+          "repo_fingerprint": "157d5add58",
+          "similarity_score": 0.123,
+          "warnings": [],
+          "signals": {
+            "repo_kind": "docker",
+            "readme_title": "",
+            "readme_summary": "",
+            "has_readme": false,
+            "has_dockerfile": true,
+            "docker_info": {
+              "base": "alpine:3.19",
+              "expose": null,
+              "cmd": "CMD [\"sh\", \"-c\", \"echo default\"]",
+              "entrypoint": null,
+              "env_keys": [],
+              "arg_keys": []
+            },
+            "config_files": [],
+            "package_scripts": [],
+            "python_entrypoints": [],
+            "env_candidates": [],
+            "key_paths": [
+              [
+                "Dockerfile",
+                "容器构建入口"
+              ],
+              [
+                "Dockerfile.dev",
+                "顶层目录/文件"
+              ]
+            ],
+            "tree_depth": 2,
+            "file_count": 2
+          },
+          "time_cost_ms": 0
+        },
+        "preflight_meta": {
+          "stages": [],
+          "external_images_to_pull": [],
+          "warnings": [],
+          "dockerfile_path": null,
+          "context_path": null,
+          "candidates": [
+            "Dockerfile",
+            "Dockerfile.dev"
+          ]
+        }
+      },
+      "manual_status": null,
+      "logs": [
+        {
+          "ts": 1769444990.7936132,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Cloning repo /home/user2643/code/AntiHub/test-repos/docker-ambiguous (ref auto)..."
+        },
+        {
+          "ts": 1769444990.7972927,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Clone completed"
+        },
+        {
+          "ts": 1769444990.8097107,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Resolving Dockerfile"
+        },
+        {
+          "ts": 1769444990.8171828,
+          "stream": "system",
+          "level": "ERROR",
+          "line": "ERROR [DOCKERFILE_AMBIGUOUS]: Dockerfile 存在多个候选 请显式指定 dockerfile_path/context_path。 (detail: Multiple Dockerfile candidates found: Dockerfile, Dockerfile.dev)"
+        },
+        {
+          "ts": 1769444990.8178499,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation started"
+        },
+        {
+          "ts": 1769444990.827207,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation finished time_cost_ms=0 warnings=none"
+        }
+      ],
+      "duration_ms": 2027,
+      "error_code": "DOCKERFILE_AMBIGUOUS",
+      "pass": true
+    },
+    {
+      "name": "no_dockerfile_deploy",
+      "payload": {
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/no-dockerfile",
+        "mode": "deploy"
+      },
+      "case_id": "c_efabe9",
+      "status": {
+        "case_id": "c_efabe9",
+        "status": "FAILED",
+        "stage": "clone",
+        "mode": "deploy",
+        "commit_sha": null,
+        "resolved_ref": null,
+        "runtime": {
+          "container_id": null,
+          "host_port": null,
+          "access_url": null,
+          "url": null,
+          "started_at": null,
+          "exited_at": null,
+          "exit_code": null
+        },
+        "env_keys": [],
+        "error_code": "DOCKERFILE_NOT_FOUND",
+        "error_message": "Dockerfile 未找到 检查 dockerfile_path/context_path 或切换为 showcase 模式。 (detail: Dockerfile not found within search depth)",
+        "created_at": 1769444992.8135674,
+        "updated_at": 1769444992.8485804,
+        "archived": false,
+        "archived_at": null,
+        "attempt": 1,
+        "retry_of": null,
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/no-dockerfile",
+        "ref": null,
+        "branch": null,
+        "container_port": null,
+        "dockerfile_path": null,
+        "context_path": null,
+        "resolved_dockerfile_path": null,
+        "resolved_context_path": null,
+        "docker_build_network": null,
+        "docker_no_cache": null,
+        "build_arg_keys": [],
+        "git_submodules": null,
+        "git_lfs": null,
+        "container_id": null,
+        "host_port": null,
+        "access_url": null,
+        "image_tag": null,
+        "last_log_at": 1769444992.8497527,
+        "report_ready": false,
+        "manual_status": "SUCCESS",
+        "manual_generated_at": 1769444992.8444943,
+        "manual_error_code": null,
+        "manual_error_message": null,
+        "manual_meta": {
+          "generated_at": 1769444992.8444943,
+          "generator_version": "v0.4",
+          "repo_fingerprint": "8006f6f6c0",
+          "similarity_score": 0.135,
+          "warnings": [],
+          "signals": {
+            "repo_kind": "unknown",
+            "readme_title": "No Dockerfile Fixture",
+            "readme_summary": "This repo intentionally has no Dockerfile.",
+            "has_readme": true,
+            "has_dockerfile": false,
+            "docker_info": {},
+            "config_files": [],
+            "package_scripts": [],
+            "python_entrypoints": [],
+            "env_candidates": [],
+            "key_paths": [
+              [
+                "README.md",
+                "顶层目录/文件"
+              ]
+            ],
+            "tree_depth": 2,
+            "file_count": 1
+          },
+          "time_cost_ms": 0
+        },
+        "preflight_meta": {
+          "stages": [],
+          "external_images_to_pull": [],
+          "warnings": [],
+          "dockerfile_path": null,
+          "context_path": null,
+          "candidates": []
+        }
+      },
+      "manual_status": null,
+      "logs": [
+        {
+          "ts": 1769444992.8194888,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Cloning repo /home/user2643/code/AntiHub/test-repos/no-dockerfile (ref auto)..."
+        },
+        {
+          "ts": 1769444992.8235009,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Clone completed"
+        },
+        {
+          "ts": 1769444992.8338299,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[preflight] Resolving Dockerfile"
+        },
+        {
+          "ts": 1769444992.8408375,
+          "stream": "system",
+          "level": "ERROR",
+          "line": "ERROR [DOCKERFILE_NOT_FOUND]: Dockerfile 未找到 检查 dockerfile_path/context_path 或切换为 showcase 模式。 (detail: Dockerfile not found within search depth)"
+        },
+        {
+          "ts": 1769444992.8409836,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation started"
+        },
+        {
+          "ts": 1769444992.8497527,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation finished time_cost_ms=0 warnings=none"
+        }
+      ],
+      "duration_ms": 2027,
+      "error_code": "DOCKERFILE_NOT_FOUND",
+      "pass": true
+    },
+    {
+      "name": "no_dockerfile_showcase",
+      "payload": {
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/no-dockerfile",
+        "mode": "showcase"
+      },
+      "case_id": "c_d52b1a",
+      "status": {
+        "case_id": "c_d52b1a",
+        "status": "SHOWCASE_READY",
+        "stage": "showcase",
+        "mode": "showcase",
+        "commit_sha": null,
+        "resolved_ref": null,
+        "runtime": {
+          "container_id": null,
+          "host_port": null,
+          "access_url": null,
+          "url": null,
+          "started_at": null,
+          "exited_at": null,
+          "exit_code": null
+        },
+        "env_keys": [],
+        "error_code": null,
+        "error_message": null,
+        "created_at": 1769444994.8413541,
+        "updated_at": 1769444994.877336,
+        "archived": false,
+        "archived_at": null,
+        "attempt": 1,
+        "retry_of": null,
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/no-dockerfile",
+        "ref": null,
+        "branch": null,
+        "container_port": null,
+        "dockerfile_path": null,
+        "context_path": null,
+        "resolved_dockerfile_path": null,
+        "resolved_context_path": null,
+        "docker_build_network": null,
+        "docker_no_cache": null,
+        "build_arg_keys": [],
+        "git_submodules": null,
+        "git_lfs": null,
+        "container_id": null,
+        "host_port": null,
+        "access_url": null,
+        "image_tag": null,
+        "last_log_at": 1769444994.87834,
+        "report_ready": false,
+        "manual_status": "SUCCESS",
+        "manual_generated_at": 1769444994.8732321,
+        "manual_error_code": null,
+        "manual_error_message": null,
+        "manual_meta": {
+          "generated_at": 1769444994.8732321,
+          "generator_version": "v0.4",
+          "repo_fingerprint": "8006f6f6c0",
+          "similarity_score": 0.135,
+          "warnings": [],
+          "signals": {
+            "repo_kind": "unknown",
+            "readme_title": "No Dockerfile Fixture",
+            "readme_summary": "This repo intentionally has no Dockerfile.",
+            "has_readme": true,
+            "has_dockerfile": false,
+            "docker_info": {},
+            "config_files": [],
+            "package_scripts": [],
+            "python_entrypoints": [],
+            "env_candidates": [],
+            "key_paths": [
+              [
+                "README.md",
+                "顶层目录/文件"
+              ]
+            ],
+            "tree_depth": 2,
+            "file_count": 1
+          },
+          "time_cost_ms": 0
+        },
+        "preflight_meta": {
+          "stages": [],
+          "external_images_to_pull": [],
+          "warnings": [],
+          "dockerfile_path": null,
+          "context_path": null,
+          "candidates": []
+        }
+      },
+      "manual_status": {
+        "case_id": "c_d52b1a",
+        "status": "SUCCESS",
+        "generated_at": 1769444994.8732321,
+        "error_code": null,
+        "error_message": null
+      },
+      "logs": [
+        {
+          "ts": 1769444994.8487678,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Cloning repo /home/user2643/code/AntiHub/test-repos/no-dockerfile (ref auto)..."
+        },
+        {
+          "ts": 1769444994.8518722,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Clone completed"
+        },
+        {
+          "ts": 1769444994.864572,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[showcase] Showcase ready (manual generation queued)"
+        },
+        {
+          "ts": 1769444994.8700368,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation started"
+        },
+        {
+          "ts": 1769444994.87834,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation finished time_cost_ms=0 warnings=none"
+        }
+      ],
+      "duration_ms": 2034,
+      "error_code": null,
+      "pass": true
+    },
+    {
+      "name": "wechat_miniprogram_showcase",
+      "payload": {
+        "repo_url": "https://github.com/Kevin7774/wechat-miniprogram-card",
+        "ref": "auto",
+        "mode": "showcase"
+      },
+      "case_id": "c_ce6de7",
+      "status": {
+        "case_id": "c_ce6de7",
+        "status": "SHOWCASE_READY",
+        "stage": "showcase",
+        "mode": "showcase",
+        "commit_sha": "5cb0003cef82a48ff9ce2a4190f09c6d29f3bf1a",
+        "resolved_ref": "main",
+        "runtime": {
+          "container_id": null,
+          "host_port": null,
+          "access_url": null,
+          "url": null,
+          "started_at": null,
+          "exited_at": null,
+          "exit_code": null
+        },
+        "env_keys": [],
+        "error_code": null,
+        "error_message": null,
+        "created_at": 1769444996.8747542,
+        "updated_at": 1769444999.566309,
+        "archived": false,
+        "archived_at": null,
+        "attempt": 1,
+        "retry_of": null,
+        "repo_url": "https://github.com/Kevin7774/wechat-miniprogram-card",
+        "ref": "auto",
+        "branch": "auto",
+        "container_port": null,
+        "dockerfile_path": null,
+        "context_path": null,
+        "resolved_dockerfile_path": null,
+        "resolved_context_path": null,
+        "docker_build_network": null,
+        "docker_no_cache": null,
+        "build_arg_keys": [],
+        "git_submodules": null,
+        "git_lfs": null,
+        "container_id": null,
+        "host_port": null,
+        "access_url": null,
+        "image_tag": null,
+        "last_log_at": 1769444999.5680718,
+        "report_ready": false,
+        "manual_status": "RUNNING",
+        "manual_generated_at": null,
+        "manual_error_code": null,
+        "manual_error_message": null,
+        "manual_meta": null,
+        "preflight_meta": {
+          "stages": [],
+          "external_images_to_pull": [],
+          "warnings": [
+            "LFS_POINTERS_DETECTED"
+          ],
+          "dockerfile_path": null,
+          "context_path": null,
+          "candidates": []
+        }
+      },
+      "manual_status": {
+        "case_id": "c_ce6de7",
+        "status": "SUCCESS",
+        "generated_at": 1769445001.3088336,
+        "error_code": null,
+        "error_message": null
+      },
+      "logs": [
+        {
+          "ts": 1769444996.88012,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Cloning repo https://github.com/Kevin7774/wechat-miniprogram-card (ref auto)..."
+        },
+        {
+          "ts": 1769444999.5404315,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Auto detected default branch 'main'."
+        },
+        {
+          "ts": 1769444999.5428457,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone] Clone completed"
+        },
+        {
+          "ts": 1769444999.5451443,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[clone-post] LFS pointers detected. Enable git.enable_lfs to fetch content."
+        },
+        {
+          "ts": 1769444999.5509918,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Checked out commit 5cb0003cef82a48ff9ce2a4190f09c6d29f3bf1a"
+        },
+        {
+          "ts": 1769444999.5615177,
+          "stream": "system",
+          "level": "INFO",
+          "line": "[showcase] Showcase ready (manual generation queued)"
+        },
+        {
+          "ts": 1769444999.5680718,
+          "stream": "system",
+          "level": "INFO",
+          "line": "Manual generation started"
+        }
+      ],
+      "duration_ms": 6047,
+      "error_code": null,
+      "pass": true
+    },
+    {
+      "name": "docs_reachable",
+      "endpoint_results": {
+        "url": "http://127.0.0.1:8010/docs",
+        "status": 200,
+        "pass": true
+      },
+      "pass": true,
+      "duration_ms": 2
+    },
+    {
+      "name": "templates_list",
+      "endpoint_results": {
+        "count": 3,
+        "template_ids": [
+          "hello-world",
+          "wechat-miniprogram-card",
+          "metagpt-min"
+        ],
+        "pass": true
+      },
+      "pass": true,
+      "duration_ms": 2
+    },
+    {
+      "name": "template_case_create",
+      "endpoint_results": {
+        "case_id": "c_49c024",
+        "status": "SHOWCASE_READY",
+        "repo_url": "/home/user2643/code/AntiHub/test-repos/hello-world",
+        "pass": true
+      },
+      "pass": true,
+      "duration_ms": 2020
+    },
+    {
+      "name": "plans_usage",
+      "endpoint_results": {
+        "plans_count": 2,
+        "usage": {
+          "date": "2026-01-27",
+          "total_cases": 27,
+          "running_cases": 1,
+          "today_cases": 27
+        },
+        "pass": true
+      },
+      "pass": true,
+      "duration_ms": 49
+    }
+  ],
+  "passed": true
+}

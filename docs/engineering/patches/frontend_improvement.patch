@@ -1,0 +1,798 @@
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -166,7 +166,7 @@
+   run: "运行",
+   analyze: "分析",
+   system: "系统",
+-  showcase: "展示",
++  showcase: "展厅",
+ };
+ 
+ const STATUS_LABELS: Record<string, string> = {
+@@ -179,8 +179,8 @@
+   FAILED: "失败",
+   FINISHED: "已结束",
+   ANALYZING: "分析中",
+-  SHOWCASE_READY: "展示就绪",
+-  SHOWCASE_FAILED: "展示失败",
++  SHOWCASE_READY: "展厅就绪",
++  SHOWCASE_FAILED: "展厅失败",
+ };
+ 
+ function useRoute() {
+@@ -266,12 +266,12 @@
+   const fileCount = (signals as Record<string, unknown>).file_count;
+ 
+   sourceList.push({
+-    label: "README",
++    label: "README 文档",
+     detail: hasReadme ? "已解析" : "未发现",
+     status: hasReadme ? "ok" : "missing",
+   });
+   sourceList.push({
+-    label: "Dockerfile",
++    label: "Dockerfile 文件",
+     detail: hasDockerfile ? "已解析" : "未发现",
+     status: hasDockerfile ? "ok" : "missing",
+   });
+@@ -334,7 +334,7 @@
+   const libraryActive = route.type === "create" || route.type === "case";
+ 
+   return (
+-    <div className="app">
++    <div className="app" data-testid="app-root">
+       <header className="topbar">
+         <div className="brand">
+           <div className="brand-mark">AH</div>
+@@ -347,22 +347,28 @@
+           <button
+             className={discoverActive ? "nav-item active" : "nav-item"}
+             onClick={() => navigate("/")}
++            data-testid="nav-dashboard"
+           >
+-            控制台
++            <span className="nav-main">控制台</span>
++            <span className="nav-sub">Console</span>
+           </button>
+           <button
+             className={libraryActive ? "nav-item active" : "nav-item"}
+             onClick={() => navigate("/create")}
++            data-testid="nav-library"
+           >
+-            模板库
++            <span className="nav-main">模板库</span>
++            <span className="nav-sub">Library</span>
+           </button>
+           <button
+             className="nav-item"
+             onClick={() =>
+               pushToast({ type: "success", message: "订阅功能待接入", detail: "订阅将支持团队级更新推送" })
+             }
++            data-testid="nav-subscription"
+           >
+-            订阅
++            <span className="nav-main">订阅</span>
++            <span className="nav-sub">Subscription</span>
+           </button>
+         </nav>
+         <div className="topbar-actions">
+@@ -563,7 +569,7 @@
+       setAutoManual(true);
+       setSelectedTemplate("");
+       onCreated(data.case_id);
+-      pushToast({ type: "success", message: "创建成功", detail: `案例 ID: ${data.case_id}` });
++      pushToast({ type: "success", message: "创建成功", detail: `案例ID: ${data.case_id}` });
+     } catch (err) {
+       const hint = getFetchFailureHint(err, API_BASE);
+       if (hint) {
+@@ -579,15 +585,19 @@
+   };
+ 
+   return (
+-    <div className="create-grid">
++    <div className="create-grid" data-testid="page-create">
+       <section className="card card-hero" style={{ animationDelay: "0.05s" }}>
+         <div className="section-title">模板库 · 创建案例</div>
+         <p className="section-sub">选择模板或填入仓库地址，生成可追溯的案例说明书。</p>
+-        <form className="form" onSubmit={handleSubmit}>
++        <form className="form" onSubmit={handleSubmit} data-testid="create-form">
+           {templates.length ? (
+             <label className="field">
+               <span>案例模板</span>
+-              <select value={selectedTemplate} onChange={(event) => applyTemplate(event.target.value)}>
++              <select
++                value={selectedTemplate}
++                onChange={(event) => applyTemplate(event.target.value)}
++                data-testid="template-select"
++              >
+                 <option value="">请选择模板</option>
+                 {templates.map((tpl) => (
+                   <option key={tpl.name} value={tpl.name}>
+@@ -608,7 +618,7 @@
+           </label>
+           <div className="field-row">
+             <label className="field">
+-              <span>分支/引用</span>
++              <span>分支/Ref</span>
+               <input
+                 type="text"
+                 placeholder="留空自动识别默认分支（常见 main/master）"
+@@ -630,11 +640,11 @@
+               <span>模式</span>
+               <select value={mode} onChange={(event) => setMode(event.target.value as "deploy" | "showcase")}>
+                 <option value="deploy">部署</option>
+-                <option value="showcase">展示</option>
++                <option value="showcase">展厅</option>
+               </select>
+             </label>
+             <label className="field checkbox">
+-              <span>缺 Dockerfile 自动展示</span>
++              <span>缺 Dockerfile 自动展厅</span>
+               <input
+                 type="checkbox"
+                 checked={autoMode}
+@@ -695,10 +705,10 @@
+       <section className="card card-glow" style={{ animationDelay: "0.12s" }}>
+         <div className="section-title">你将获得</div>
+         <ul className="list">
+-          <li>2 秒内返回案例 ID</li>
++          <li>2 秒内返回案例ID</li>
+           <li>WS 日志回放 + 实时追踪</li>
+           <li>自动生成仓库说明书 + Mermaid 图</li>
+-          <li>仅展示环境变量键名</li>
++          <li>仅显示环境变量键名</li>
+         </ul>
+         <div className="note">
+           <div className="note-title">安全提示</div>
+@@ -816,7 +826,7 @@
+   };
+ 
+   return (
+-    <div className="dashboard">
++    <div className="dashboard" data-testid="page-dashboard">
+       <div className="dashboard-head">
+         <div>
+           <div className="section-title">控制台 · 案例列表</div>
+@@ -832,7 +842,7 @@
+         </div>
+       </div>
+ 
+-      <div className="stats">
++      <div className="stats" data-testid="status-cards">
+         <div className="card stat-card">
+           <div className="stat-title">总数</div>
+           <div className="stat-value">{total}</div>
+@@ -849,17 +859,18 @@
+ 
+       <StatusBar counts={statusCounts} total={totalVisible} />
+ 
+-      <div className="filters-panel card">
++      <div className="filters-panel card" data-testid="filters-panel">
+         <label className="field">
+           <span>搜索</span>
+           <input
+             type="text"
+-            placeholder="案例 ID / 仓库 / 分支"
++            placeholder="案例ID / 仓库地址 / 分支/Ref"
+             value={query}
+             onChange={(event) => {
+               setQuery(event.target.value);
+               setPage(1);
+             }}
++            data-testid="case-search"
+           />
+         </label>
+         <label className="field">
+@@ -925,7 +936,7 @@
+ 
+       {error ? <div className="error-banner">{error}</div> : null}
+ 
+-      <div className="case-list">
++      <div className="case-list" data-testid="case-list">
+         {loading ? (
+           <div className="card empty-state">加载中，正在获取案例列表...</div>
+         ) : cases.length ? (
+@@ -945,15 +956,15 @@
+                 ? "pill-warn"
+                 : "pill-muted";
+             return (
+-              <article className="card case-card" key={item.case_id}>
++              <article className="card case-card" key={item.case_id} data-testid={`case-card-${item.case_id}`}>
+                 <div className="case-card-main">
+                   <div className="case-card-title">
+                     <LongText text={item.case_id} lines={1} allowToggle={false} className="case-id" mono />
+                     <CopyButton
+                       value={item.case_id}
+-                      label="复制案例 ID"
++                      label="复制案例ID"
+                       onCopied={() =>
+-                        pushToast({ type: "success", message: "已复制", detail: "案例 ID" })
++                        pushToast({ type: "success", message: "已复制案例ID", detail: item.case_id })
+                       }
+                     />
+                     <span className={`badge badge--${statusTone(item.status)}`}>{statusLabel(item.status)}</span>
+@@ -961,21 +972,23 @@
+                   </div>
+                   <div className="case-card-meta">
+                     <CopyField
+-                      label="仓库"
++                      label="仓库地址"
+                       value={item.repo_url || null}
+                       mono
+                       lines={2}
+                       allowToggle
+                       onCopied={() =>
+-                        pushToast({ type: "success", message: "已复制", detail: "仓库地址" })
++                        item.repo_url &&
++                        pushToast({ type: "success", message: "已复制仓库地址", detail: item.repo_url })
+                       }
+                     />
+                     <CopyField
+-                      label="分支/引用"
++                      label="分支/Ref"
+                       value={refValue !== "-" ? refValue : null}
+                       mono
+                       onCopied={() =>
+-                        pushToast({ type: "success", message: "已复制", detail: "分支/引用" })
++                        refValue !== "-" &&
++                        pushToast({ type: "success", message: "已复制分支/Ref", detail: refValue })
+                       }
+                     />
+                     <CopyField
+@@ -983,7 +996,8 @@
+                       value={accessValue}
+                       mono
+                       onCopied={() =>
+-                        pushToast({ type: "success", message: "已复制", detail: "访问地址" })
++                        accessValue &&
++                        pushToast({ type: "success", message: "已复制访问地址", detail: accessValue })
+                       }
+                     />
+                   </div>
+@@ -1055,9 +1069,9 @@
+   ] as const;
+ 
+   return (
+-    <div className="card status-card">
++    <div className="card status-card" data-testid="status-card">
+       <div className="section-title">状态分布</div>
+-      <div className="status-bar">
++      <div className="status-bar" data-testid="status-bar">
+         {total
+           ? items.map((item) => {
+               const value = counts[item.key];
+@@ -1155,17 +1169,21 @@
+ }) {
+   const statusUpper = (caseData?.status || "").toUpperCase();
+   const refValue = caseData?.resolved_ref || caseData?.ref || caseData?.branch || null;
++  const repoUrl = caseData?.repo_url || null;
++  const commitSha = caseData?.commit_sha || null;
+   const steps = buildPipelineSteps(STAGE_LABELS, caseData?.stage, caseData?.status);
+ 
+   return (
+-    <section className="case-header card card-glow">
++    <section className="case-header card card-glow" data-testid="case-header">
+       <div className="case-header-main">
+         <div className="case-title-row">
+           <LongText text={caseId} lines={1} allowToggle={false} className="case-id" mono />
+           <CopyButton
+             value={caseId}
+-            label="复制案例 ID"
+-            onCopied={() => pushToast({ type: "success", message: "已复制", detail: "案例 ID" })}
++            label="复制案例ID"
++            onCopied={() =>
++              pushToast({ type: "success", message: "已复制案例ID", detail: caseId })
++            }
+           />
+           <span className={`badge badge--${statusTone(caseData?.status)}`}>{statusLabel(caseData?.status)}</span>
+           <span className="stage">阶段：{stageLabel(caseData?.stage)}</span>
+@@ -1173,24 +1191,31 @@
+         <Stepper steps={steps} />
+         <div className="case-meta-grid">
+           <CopyField
+-            label="仓库"
+-            value={caseData?.repo_url || null}
++            label="仓库地址"
++            value={repoUrl}
+             mono
+             lines={2}
+             allowToggle
+-            onCopied={() => pushToast({ type: "success", message: "已复制", detail: "仓库地址" })}
++            onCopied={() =>
++              repoUrl && pushToast({ type: "success", message: "已复制仓库地址", detail: repoUrl })
++            }
+           />
+           <CopyField
+-            label="分支/引用"
++            label="分支/Ref"
+             value={refValue}
+             mono
+-            onCopied={() => pushToast({ type: "success", message: "已复制", detail: "分支/引用" })}
++            onCopied={() =>
++              refValue && pushToast({ type: "success", message: "已复制分支/Ref", detail: refValue })
++            }
+           />
+           <CopyField
+-            label="提交"
+-            value={caseData?.commit_sha || null}
++            label="提交信息"
++            value={commitSha}
+             mono
+-            onCopied={() => pushToast({ type: "success", message: "已复制", detail: "提交信息" })}
++            onCopied={() =>
++              commitSha &&
++              pushToast({ type: "success", message: "已复制提交信息", detail: commitSha })
++            }
+           />
+         </div>
+       </div>
+@@ -1207,7 +1232,13 @@
+           <CopyButton
+             value={runtime.access_url}
+             label="复制访问地址"
+-            onCopied={() => pushToast({ type: "success", message: "已复制", detail: "访问地址" })}
++            onCopied={() =>
++              pushToast({
++                type: "success",
++                message: "已复制访问地址",
++                detail: runtime.access_url || "",
++              })
++            }
+           />
+         ) : null}
+         <button
+@@ -1402,7 +1433,7 @@
+   };
+ 
+   return (
+-    <div className="detail">
++    <div className="detail" data-testid="page-detail">
+       <div className="detail-head">
+         <button className="ghost" onClick={onBack}>
+           返回
+@@ -1413,7 +1444,7 @@
+           </button>
+         </div>
+       </div>
+-      {flashCaseId ? <div className="success-banner">创建成功，案例 ID：{flashCaseId}</div> : null}
++      {flashCaseId ? <div className="success-banner">创建成功，案例ID：{flashCaseId}</div> : null}
+       {loadError ? <div className="error-banner">{loadError}</div> : null}
+ 
+       <CaseHeader
+@@ -1424,29 +1455,32 @@
+         pushToast={pushToast}
+       />
+ 
+-      <div className="tabs">
++      <div className="tabs" data-testid="detail-tabs">
+         <button
+           className={activeTab === "overview" ? "tab active" : "tab"}
+           onClick={() => setActiveTab("overview")}
++          data-testid="tab-overview"
+         >
+           概览
+         </button>
+         <button
+           className={activeTab === "logs" ? "tab active" : "tab"}
+           onClick={() => setActiveTab("logs")}
++          data-testid="tab-logs"
+         >
+           日志
+         </button>
+         <button
+           className={activeTab === "manual" ? "tab active" : "tab"}
+           onClick={() => setActiveTab("manual")}
++          data-testid="tab-manual"
+         >
+           说明书
+         </button>
+       </div>
+ 
+       {activeTab === "overview" ? (
+-        <div className="overview-grid">
++        <div className="overview-grid" data-testid="panel-overview">
+           <section className="card overview-card" style={{ animationDelay: "0.05s" }}>
+             <div className="section-title">运行与访问</div>
+             <div className="meta meta-compact">
+@@ -1461,7 +1495,10 @@
+                 mono
+                 lines={2}
+                 allowToggle
+-                onCopied={() => pushToast({ type: "success", message: "已复制", detail: "访问地址" })}
++                onCopied={() =>
++                  runtime.access_url &&
++                  pushToast({ type: "success", message: "已复制访问地址", detail: runtime.access_url })
++                }
+               />
+               <CopyField
+                 label="主机端口"
+@@ -1469,12 +1506,15 @@
+                 mono
+               />
+               <CopyField
+-                label="容器 ID"
++                label="容器ID"
+                 value={runtime.container_id || null}
+                 mono
+                 lines={2}
+                 allowToggle
+-                onCopied={() => pushToast({ type: "success", message: "已复制", detail: "容器 ID" })}
++                onCopied={() =>
++                  runtime.container_id &&
++                  pushToast({ type: "success", message: "已复制容器ID", detail: runtime.container_id })
++                }
+               />
+             </div>
+           </section>
+@@ -1501,7 +1541,7 @@
+                 ))}
+               </div>
+             ) : (
+-              <div className="muted">暂无环境变量键。</div>
++              <div className="muted">暂无环境变量键，可在创建时填写。</div>
+             )}
+           </section>
+           <section className="card overview-card tool-shelf" style={{ animationDelay: "0.22s" }}>
+@@ -1526,15 +1566,19 @@
+             <section className="card error-card overview-card--full" style={{ animationDelay: "0.24s" }}>
+               <div className="section-title">错误</div>
+               <div className="error-code">{errorCode || "UNKNOWN"}</div>
+-              <div className="error-message">{errorMessage || "未知错误。"}</div>
+-              <div className="error-hint">{errorHint || "请查看日志详情。"}</div>
++              <div className="error-message">
++                <LongText text={errorMessage || "未知错误。"} lines={3} />
++              </div>
++              <div className="error-hint">
++                <LongText text={errorHint || "请查看日志详情。"} lines={2} />
++              </div>
+             </section>
+           ) : null}
+         </div>
+       ) : null}
+ 
+       {activeTab === "logs" ? (
+-        <section className="card logs" style={{ animationDelay: "0.3s" }}>
++        <section className="card logs" style={{ animationDelay: "0.3s" }} data-testid="panel-logs">
+           <LogPanel caseId={caseId} onCopyLogs={copyLogs} onDownloadLogs={downloadLogs} />
+         </section>
+       ) : null}
+@@ -1689,7 +1733,7 @@
+   };
+ 
+   return (
+-    <div className="manual">
++    <div className="manual" data-testid="panel-manual">
+       <div className="manual-head card">
+         <div>
+           <div className="section-title">说明书</div>
+@@ -1713,8 +1757,12 @@
+         <div className="card error-card">
+           <div className="section-title">生成失败</div>
+           <div className="error-code">{displayErrorCode || "MANUAL_FAILED"}</div>
+-          <div className="error-message">{displayErrorMessage || "请稍后重试。"}</div>
+-          <div className="error-hint">{displayErrorHint || "请检查仓库文件与权限。"}</div>
++          <div className="error-message">
++            <LongText text={displayErrorMessage || "请稍后重试。"} lines={3} />
++          </div>
++          <div className="error-hint">
++            <LongText text={displayErrorHint || "请检查仓库文件与权限。"} lines={2} />
++          </div>
+         </div>
+       ) : null}
+ 
+@@ -1779,7 +1827,7 @@
+   const signalEntries = useMemo(() => Object.entries(meta.signals || {}), [meta.signals]);
+ 
+   return (
+-    <div className="doc-reader">
++    <div className="doc-reader" data-testid="doc-reader">
+       <div className="doc-reader-main">
+         <div className="card doc-content">
+           <div className="doc-content-head">
+@@ -1809,7 +1857,7 @@
+         <div className="card doc-panel">
+           <div className="doc-panel-title">目录</div>
+           {toc.length ? (
+-            <ul className="doc-toc">
++            <ul className="doc-toc" data-testid="doc-toc">
+               {toc.map((item) => (
+                 <li key={item.id} className={`toc-level-${item.level}`}>
+                   <a href={`#${item.id}`}>{item.text}</a>
+@@ -2276,7 +2324,7 @@
+   };
+ 
+   return (
+-    <div className="logs-panel">
++    <div className="logs-panel" data-testid="logs-panel">
+       <div className="logs-header">
+         <div>
+           <div className="section-title">日志</div>
+--- a/frontend/src/styles.css
++++ b/frontend/src/styles.css
+@@ -10,7 +10,7 @@
+   --accent-warm: #b45309;
+   --card: #ffffff;
+   --border: #e7e1d6;
+-  --shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
++  --shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+   --success: #15803d;
+   --danger: #b91c1c;
+   --warning: #d97706;
+@@ -121,11 +121,16 @@
+   border: none;
+   background: transparent;
+   color: var(--muted);
+-  padding: 8px 16px;
++  padding: 8px 14px;
+   border-radius: 999px;
+   font-size: 13px;
+   letter-spacing: 0.2px;
+   text-transform: none;
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  gap: 2px;
++  min-width: 92px;
+ }
+ 
+ .nav-item.active {
+@@ -134,6 +139,21 @@
+   box-shadow: 0 10px 18px rgba(15, 118, 110, 0.3);
+ }
+ 
++.nav-main {
++  font-weight: 600;
++}
++
++.nav-sub {
++  font-size: 10px;
++  letter-spacing: 0.4px;
++  text-transform: uppercase;
++  color: rgba(107, 114, 128, 0.85);
++}
++
++.nav-item.active .nav-sub {
++  color: rgba(255, 255, 255, 0.8);
++}
++
+ .main {
+   max-width: 1280px;
+   margin: 0 auto;
+@@ -189,7 +209,8 @@
+ 
+ .section-sub {
+   color: var(--muted);
+-  margin-bottom: 20px;
++  margin-bottom: 18px;
++  font-size: 14px;
+ }
+ 
+ .create-grid {
+@@ -737,7 +758,7 @@
+   border-radius: 999px;
+   font-size: 13px;
+   font-weight: 600;
+-  text-transform: uppercase;
++  text-transform: none;
+   border: 1px solid transparent;
+ }
+ 
+@@ -1227,6 +1248,7 @@
+   align-items: baseline;
+   gap: 8px;
+   min-width: 0;
++  max-width: 100%;
+ }
+ 
+ .long-text span {
+@@ -1261,8 +1283,8 @@
+ 
+ .copy-field-label {
+   font-size: 11px;
+-  text-transform: uppercase;
+-  letter-spacing: 0.4px;
++  text-transform: none;
++  letter-spacing: 0.2px;
+   color: var(--muted);
+ }
+ 
+@@ -1271,6 +1293,7 @@
+   align-items: center;
+   gap: 8px;
+   min-width: 0;
++  flex-wrap: wrap;
+ }
+ 
+ .stepper {
+@@ -1285,8 +1308,8 @@
+   align-items: center;
+   gap: 6px;
+   font-size: 11px;
+-  text-transform: uppercase;
+-  letter-spacing: 0.4px;
++  text-transform: none;
++  letter-spacing: 0.2px;
+   color: var(--muted);
+ }
+ 
+@@ -1332,6 +1355,9 @@
+   display: flex;
+   gap: 18px;
+   align-items: stretch;
++  overflow: hidden;
++  max-width: 100%;
++  width: 100%;
+ }
+ 
+ .case-card-main {
+@@ -1704,6 +1730,15 @@
+     justify-content: space-between;
+   }
+ 
++  .nav-item {
++    min-width: 0;
++    flex: 1;
++  }
++
++  .nav-sub {
++    display: none;
++  }
++
+   .detail-head {
+     flex-direction: column;
+     align-items: flex-start;
+--- a/frontend/e2e/smoke.spec.ts
++++ b/frontend/e2e/smoke.spec.ts
+@@ -35,32 +35,38 @@
+   cases?: { items: typeof demoCase[]; total: number; page: number; size: number };
+ };
+ 
+-async function mockBase(page: Page) {
++async function mockBase(page: Page, options: MockBaseOptions = {}) {
+   await page.route("**/error-codes", (route) => route.fulfill({ json: {} }));
+-}
+-
+-test("控制台加载案例列表", async ({ page }) => {
+-  await mockBase(page);
+-  await page.route("**/cases?**", (route) =>
++  await page.route("**/case-templates", (route) =>
++    route.fulfill({ json: options.templates ?? [] })
++  );
++  await page.route(/\/cases\?.*$/, (route) =>
++    route.fulfill({
++      json: options.cases ?? { items: [], total: 0, page: 1, size: 10 },
++    })
++  );
++  await page.route("**/cases", (route) =>
+     route.fulfill({
+-      json: { items: [demoCase], total: 1, page: 1, size: 10 },
++      json: options.cases ?? { items: [], total: 0, page: 1, size: 10 },
+     })
+   );
++}
++
++test("控制台加载案例列表", async ({ page }) => {
++  await mockBase(page, { cases: { items: [demoCase], total: 1, page: 1, size: 10 } });
+   await page.goto("/");
+-  await expect(page.getByText("控制台 · 案例列表")).toBeVisible();
+-  await expect(page.getByText("c_demo")).toBeVisible();
++  await expect(page.getByTestId("page-dashboard")).toBeVisible();
++  await expect(page.getByTestId("case-card-c_demo")).toBeVisible();
+ });
+ 
+ test("模板库可加载模板列表", async ({ page }) => {
+-  await mockBase(page);
+-  await page.route("**/case-templates", (route) =>
+-    route.fulfill({
+-      json: [{ name: "hello-world", repo_url: "https://github.com/example/hello" }],
+-    })
+-  );
++  await mockBase(page, {
++    templates: [{ name: "hello-world", repo_url: "https://github.com/example/hello" }],
++  });
+   await page.goto("/create");
+-  await expect(page.getByText("模板库 · 创建案例")).toBeVisible();
+-  await expect(page.getByText("hello-world")).toBeVisible();
++  await expect(page.getByTestId("page-create")).toBeVisible();
++  await expect(page.getByTestId("template-select")).toBeVisible();
++  await expect(page.getByRole("option", { name: "hello-world" })).toBeVisible();
+ });
+ 
+ test("案例详情可切换 Tabs", async ({ page }) => {
+@@ -71,11 +77,11 @@
+   );
+   await page.route("**/cases/c_demo/manual", (route) => route.fulfill({ json: manualResponse }));
+   await page.goto("/cases/c_demo");
+-  await expect(page.getByText("运行与访问")).toBeVisible();
+-  await page.getByRole("button", { name: "日志" }).click();
+-  await expect(page.getByText("日志")).toBeVisible();
+-  await page.getByRole("button", { name: "说明书" }).click();
+-  await expect(page.getByText("说明书")).toBeVisible();
++  await expect(page.getByTestId("case-header")).toBeVisible();
++  await page.getByTestId("tab-logs").click();
++  await expect(page.getByTestId("panel-logs")).toBeVisible();
++  await page.getByTestId("tab-manual").click();
++  await expect(page.getByTestId("panel-manual")).toBeVisible();
+ });
+ 
+ test("说明书 TOC 渲染", async ({ page }) => {
+@@ -86,8 +92,9 @@
+   );
+   await page.route("**/cases/c_demo/manual", (route) => route.fulfill({ json: manualResponse }));
+   await page.goto("/cases/c_demo");
+-  await page.getByRole("button", { name: "说明书" }).click();
+-  await expect(page.getByText("目录")).toBeVisible();
+-  await expect(page.getByRole("link", { name: "概览" })).toBeVisible();
+-  await expect(page.getByRole("link", { name: "快速开始" })).toBeVisible();
++  await page.getByTestId("tab-manual").click();
++  const toc = page.getByTestId("doc-toc");
++  await expect(toc).toBeVisible();
++  await expect(toc.getByRole("link", { name: "概览" })).toBeVisible();
++  await expect(toc.getByRole("link", { name: "快速开始" })).toBeVisible();
+ });
+--- a/frontend/playwright.config.ts
++++ b/frontend/playwright.config.ts
+@@ -3,13 +3,18 @@
+ export default defineConfig({
+   testDir: "./e2e",
+   timeout: 30_000,
++  expect: {
++    timeout: 5_000,
++  },
+   use: {
+     baseURL: "http://127.0.0.1:4173",
+     viewport: { width: 1280, height: 720 },
++    trace: "retain-on-failure",
+   },
+   webServer: {
+-    command: "npm run dev -- --host 127.0.0.1 --port 4173",
++    command: "npm run e2e:server",
+     url: "http://127.0.0.1:4173",
+-    reuseExistingServer: !process.env.CI,
++    reuseExistingServer: false,
++    timeout: 120_000,
+   },
+ });
+--- a/frontend/src/__tests__/utils.test.ts
++++ b/frontend/src/__tests__/utils.test.ts
+@@ -64,7 +64,7 @@
+   });
+ 
+   it("buildPipelineSteps reflects stage and status", () => {
+-    const labels = { clone: "克隆", build: "构建", run: "运行", analyze: "分析", showcase: "展示" };
++    const labels = { clone: "克隆", build: "构建", run: "运行", analyze: "分析", showcase: "展厅" };
+     const steps = buildPipelineSteps(labels, "build", "BUILDING");
+     expect(steps[0].status).toBe("done");
+     expect(steps[1].status).toBe("active");
+--- a/TESTING.md
++++ b/TESTING.md
+@@ -40,6 +40,8 @@
+ npm run e2e
+ ```
+ 
++说明：`npm run e2e` 会通过 `npm run e2e:server` 自动执行 build + preview，并启动 4173 端口（严格占用端口）。
++
+ 可选可视化运行：
+ ```bash
+ npm run e2e:headed
+@@ -54,3 +56,8 @@
+ 定位失败：
+ - 冒烟用例位于 `frontend/e2e/smoke.spec.ts`
+ - 若端口冲突，检查 4173 是否被占用
++- 失败时保留 trace，可用以下命令打开：
++```bash
++cd frontend
++npx playwright show-trace test-results/**/trace.zip
++```
+--- a/frontend/package.json
++++ b/frontend/package.json
+@@ -10,7 +10,8 @@
+     "test": "vitest run",
+     "test:ui": "vitest",
+     "e2e": "playwright test",
+-    "e2e:headed": "playwright test --headed"
++    "e2e:headed": "playwright test --headed",
++    "e2e:server": "npm run build && npm run preview -- --host 127.0.0.1 --port 4173 --strictPort"
+   },
+   "dependencies": {
+     "marked": "^12.0.2",

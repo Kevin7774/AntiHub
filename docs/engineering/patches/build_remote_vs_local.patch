@@ -1,0 +1,1165 @@
+--- config.py
++++ config.py
+@@ -61,6 +61,12 @@
+ MANUAL_STATUS_PREFIX = _get("MANUAL_STATUS_PREFIX", "manual_status:")
+ MANUAL_STATS_KEY = _get("MANUAL_STATS_KEY", "manual_stats")
+ 
++DOCKERFILE_SEARCH_DEPTH = int(_get("DOCKERFILE_SEARCH_DEPTH", "2"))
++DOCKER_BUILD_NETWORK = str(_get("DOCKER_BUILD_NETWORK", "bridge"))
++DOCKER_BUILD_NO_CACHE = str(_get("DOCKER_BUILD_NO_CACHE", "false")).lower() in {"1", "true", "yes"}
++GIT_ENABLE_SUBMODULES = str(_get("GIT_ENABLE_SUBMODULES", "false")).lower() in {"1", "true", "yes"}
++GIT_ENABLE_LFS = str(_get("GIT_ENABLE_LFS", "false")).lower() in {"1", "true", "yes"}
++
+ CORS_ORIGINS = [
+     origin.strip()
+     for origin in str(
+--- errors.py
++++ errors.py
+@@ -33,10 +33,26 @@
+         "message": "Dockerfile 缺失",
+         "hint": "请在仓库根目录补齐 Dockerfile。",
+     },
++    "DOCKERFILE_NOT_FOUND": {
++        "message": "Dockerfile 未找到",
++        "hint": "检查 dockerfile_path/context_path 或补齐 Dockerfile。",
++    },
++    "DOCKER_BASE_IMAGE_PULL_FAILED": {
++        "message": "基础镜像拉取失败",
++        "hint": "检查 registry mirror、网络或 DNS 配置。",
++    },
+     "CONTAINER_EXITED": {
+         "message": "容器启动阶段退出",
+         "hint": "确认进程持续运行且监听端口正确。",
+     },
++    "DOCKER_BUILD_NETWORK_FAILED": {
++        "message": "构建网络失败",
++        "hint": "检查 DNS/代理/构建网络配置（docker_build_network）。",
++    },
++    "BUILDKIT_REQUIRED": {
++        "message": "Docker BuildKit 未启用",
++        "hint": "请设置 DOCKER_BUILDKIT=1 或在 daemon.json 中开启 features.buildkit=true。",
++    },
+     "CONTAINER_EXIT_NONZERO": {
+         "message": "容器非零退出",
+         "hint": "检查应用启动日志与依赖配置。",
+--- docker_ops.py
++++ docker_ops.py
+@@ -1,13 +1,15 @@
++import os
+ import re
++import shlex
+ import shutil
+ import subprocess
+ import time
+ from dataclasses import dataclass
+ from pathlib import Path
+ from typing import Dict, Iterable, List, Optional, Tuple
+-
+-import docker
+-
++
++import docker
++
+ from config import DEFAULT_BRANCH, GIT_CLONE_TIMEOUT_SECONDS
+ 
+ 
+@@ -34,7 +36,15 @@
+ 
+ 
+ BRANCH_NOT_FOUND_PATTERN = re.compile(r"Remote branch .* not found", re.IGNORECASE)
+-SYMBOLIC_REF_PATTERN = re.compile(r"^ref:\s+refs/heads/(?P<branch>\\S+)\\s+HEAD$")
++SYMBOLIC_REF_PATTERN = re.compile(r"^ref:\s+refs/heads/(?P<branch>\S+)\s+HEAD$")
++FROM_PATTERN = re.compile(r"^FROM\s+(.+)$", re.IGNORECASE)
++
++
++@dataclass
++class DockerfileFromInfo:
++    external_images: List[str]
++    stages: List[str]
++    requires_buildkit: bool
+ 
+ 
+ def normalize_ref(ref: Optional[str]) -> Optional[str]:
+@@ -109,7 +119,13 @@
+     return heads
+ 
+ 
+-def clone_repo(repo_url: str, ref: Optional[str], target_dir: Path) -> CloneResult:
++def clone_repo(
++    repo_url: str,
++    ref: Optional[str],
++    target_dir: Path,
++    enable_submodules: bool = False,
++    enable_lfs: bool = False,
++) -> CloneResult:
+     target_dir.parent.mkdir(parents=True, exist_ok=True)
+     requested_ref = normalize_ref(ref)
+     local_path = _is_local_repo(repo_url)
+@@ -134,6 +150,7 @@
+             capture_output=True,
+             timeout=GIT_CLONE_TIMEOUT_SECONDS,
+         )
++        _post_clone_prepare(target_dir, enable_submodules, enable_lfs)
+ 
+     if requested_ref in {None, "auto"}:
+         default_branch = detect_default_branch(repo_url)
+@@ -175,15 +192,94 @@
+                 heads=heads,
+             ) from exc
+         raise
+-
+-
+-def ensure_dockerfile(target_dir: Path) -> Path:
+-    dockerfile = target_dir / "Dockerfile"
+-    if not dockerfile.exists():
+-        raise FileNotFoundError(
+-            "Dockerfile not found. Ensure the repository root contains a Dockerfile."
+-        )
+-    return dockerfile
++
++
++def _post_clone_prepare(repo_dir: Path, enable_submodules: bool, enable_lfs: bool) -> None:
++    if enable_submodules and (repo_dir / ".gitmodules").exists():
++        subprocess.run(
++            ["git", "-C", str(repo_dir), "submodule", "update", "--init", "--recursive"],
++            check=True,
++            text=True,
++            capture_output=True,
++            timeout=GIT_CLONE_TIMEOUT_SECONDS,
++        )
++    if enable_lfs and _has_lfs(repo_dir):
++        subprocess.run(
++            ["git", "-C", str(repo_dir), "lfs", "pull"],
++            check=True,
++            text=True,
++            capture_output=True,
++            timeout=GIT_CLONE_TIMEOUT_SECONDS,
++        )
++
++
++def _has_lfs(repo_dir: Path) -> bool:
++    attrs = repo_dir / ".gitattributes"
++    if attrs.exists():
++        try:
++            text = attrs.read_text(encoding="utf-8", errors="replace")
++        except Exception:
++            text = ""
++        if "filter=lfs" in text:
++            return True
++    for root, _, files in os.walk(repo_dir):
++        rel = Path(root).relative_to(repo_dir)
++        if len(rel.parts) > 2:
++            break
++        for file in files:
++            if file.endswith(".gitattributes"):
++                return True
++    return False
++
++
++def resolve_dockerfile(
++    repo_root: Path,
++    dockerfile_path: Optional[str],
++    context_path: Optional[str],
++    search_depth: int = 2,
++) -> Tuple[Path, Path, List[str], bool]:
++    candidates: List[str] = []
++    used_auto = False
++    if dockerfile_path:
++        candidate = (repo_root / dockerfile_path).resolve()
++        if not candidate.exists():
++            raise FileNotFoundError(f"Dockerfile not found at {dockerfile_path}")
++        ctx = _resolve_context_path(repo_root, context_path, candidate.parent)
++        return candidate, ctx, candidates, used_auto
++
++    root_dockerfile = repo_root / "Dockerfile"
++    if root_dockerfile.exists():
++        ctx = _resolve_context_path(repo_root, context_path, repo_root)
++        return root_dockerfile, ctx, candidates, used_auto
++
++    for root, dirs, files in os.walk(repo_root):
++        rel = Path(root).relative_to(repo_root)
++        if len(rel.parts) > search_depth:
++            dirs[:] = []
++            continue
++        if "Dockerfile" in files:
++            found = Path(root) / "Dockerfile"
++            candidates.append(str(found.relative_to(repo_root)))
++
++    if candidates:
++        used_auto = True
++        selected = repo_root / candidates[0]
++        ctx = _resolve_context_path(repo_root, context_path, selected.parent)
++        return selected, ctx, candidates, used_auto
++
++    raise FileNotFoundError("Dockerfile not found within search depth")
++
++
++def _resolve_context_path(repo_root: Path, context_path: Optional[str], fallback: Path) -> Path:
++    if context_path:
++        ctx = (repo_root / context_path).resolve()
++    else:
++        ctx = fallback.resolve()
++    try:
++        ctx.relative_to(repo_root.resolve())
++    except ValueError as exc:
++        raise FileNotFoundError("context_path must be under repository root") from exc
++    return ctx
+ 
+ 
+ def detect_exposed_port(dockerfile: Path, default_port: int = 80) -> int:
+@@ -194,10 +290,101 @@
+     return default_port
+ 
+ 
+-def build_image(client: docker.DockerClient, path: Path, tag: str) -> Iterable[dict]:
++def build_image(
++    client: docker.DockerClient,
++    path: Path,
++    tag: str,
++    dockerfile: Optional[Path] = None,
++    buildargs: Optional[Dict[str, str]] = None,
++    network_mode: Optional[str] = None,
++    nocache: bool = False,
++) -> Iterable[dict]:
+     # Let the docker SDK handle streaming/decode; decode=True on newer SDKs returns dicts and breaks json_stream.
+-    _, logs = client.images.build(path=str(path), tag=tag, rm=True)
++    dockerfile_arg = None
++    if dockerfile:
++        dockerfile_arg = str(dockerfile)
++    _, logs = client.images.build(
++        path=str(path),
++        tag=tag,
++        rm=True,
++        dockerfile=dockerfile_arg,
++        buildargs=buildargs or None,
++        network_mode=network_mode,
++        nocache=nocache,
++    )
+     return logs
++
++
++def _tokenize_from(rest: str) -> List[str]:
++    try:
++        return shlex.split(rest, posix=True)
++    except ValueError:
++        return rest.split()
++
++
++def parse_dockerfile_from(dockerfile_path: Path) -> DockerfileFromInfo:
++    external_images: List[str] = []
++    stages: List[str] = []
++    known_stages = set()
++    requires_buildkit = False
++    try:
++        contents = dockerfile_path.read_text(encoding="utf-8", errors="replace")
++    except Exception:
++        return DockerfileFromInfo(external_images, stages, requires_buildkit)
++
++    for raw_line in contents.splitlines():
++        line = raw_line.strip()
++        if not line:
++            continue
++        lower = line.lower()
++        if lower.startswith("# syntax=docker/dockerfile:"):
++            requires_buildkit = True
++        if lower.startswith("run ") and "--mount=" in lower:
++            requires_buildkit = True
++        if "--platform=" in lower or "$buildplatform" in lower or "$targetplatform" in lower:
++            requires_buildkit = True
++
++        if line.startswith("#"):
++            continue
++        match = FROM_PATTERN.match(line)
++        if not match:
++            continue
++
++        rest = match.group(1).strip()
++        tokens = _tokenize_from(rest)
++        if not tokens:
++            continue
++
++        index = 0
++        while index < len(tokens) and tokens[index].startswith("--"):
++            if tokens[index].startswith("--platform"):
++                requires_buildkit = True
++            index += 1
++        if index >= len(tokens):
++            continue
++        image_or_stage = tokens[index]
++        index += 1
++
++        stage = None
++        if index + 1 < len(tokens) and tokens[index].lower() == "as":
++            stage = tokens[index + 1]
++
++        is_stage_reference = image_or_stage in known_stages
++        if stage and stage not in known_stages:
++            stages.append(stage)
++            known_stages.add(stage)
++
++        if image_or_stage.lower() == "scratch":
++            continue
++        if not is_stage_reference:
++            if image_or_stage not in external_images:
++                external_images.append(image_or_stage)
++
++    return DockerfileFromInfo(external_images, stages, requires_buildkit)
++
++
++def parse_base_images(dockerfile_path: Path) -> List[str]:
++    return parse_dockerfile_from(dockerfile_path).external_images
+ 
+ 
+ def run_container_dynamic(
+--- worker.py
++++ worker.py
+@@ -1,9 +1,11 @@
+ import json
++import os
++import re
+ import subprocess
+ import time
+ from pathlib import Path
+ from threading import Thread
+-from typing import Dict, Optional
++from typing import Dict, List, Optional, Tuple
+ 
+ import docker
+ import redis
+@@ -15,7 +17,12 @@
+     BUILD_ROOT,
+     CASE_LABEL_KEY,
+     CASE_LABEL_MANAGED,
++    DOCKER_BUILD_NETWORK,
++    DOCKER_BUILD_NO_CACHE,
+     DOCKER_BUILD_TIMEOUT_SECONDS,
++    DOCKERFILE_SEARCH_DEPTH,
++    GIT_ENABLE_LFS,
++    GIT_ENABLE_SUBMODULES,
+     MANUAL_MAX_README_CHARS,
+     MANUAL_ROOT,
+     MANUAL_TREE_DEPTH,
+@@ -33,8 +40,9 @@
+     cleanup_build_dir,
+     clone_repo,
+     detect_exposed_port,
+-    ensure_dockerfile,
+     normalize_ref,
++    parse_dockerfile_from,
++    resolve_dockerfile,
+     run_container_dynamic,
+     run_container_fixed,
+     wait_for_container_running,
+@@ -66,6 +74,96 @@
+     return time.time()
+ 
+ 
++def _is_network_error(message: str) -> bool:
++    lowered = message.lower()
++    patterns = [
++        "temporary failure in name resolution",
++        "no such host",
++        "could not resolve",
++        "lookup",
++        "network is unreachable",
++        "i/o timeout",
++        "connection timed out",
++        "dial tcp",
++        "dns",
++    ]
++    return any(token in lowered for token in patterns)
++
++
++def _resolve_image_vars(image: str, build_args: Dict[str, str]) -> Tuple[str, bool]:
++    pattern = re.compile(r"\$(\{)?([A-Za-z_][A-Za-z0-9_]*)\}?")
++    unresolved = False
++
++    def repl(match: re.Match) -> str:
++        nonlocal unresolved
++        key = match.group(2)
++        if key in build_args:
++            return build_args[key]
++        unresolved = True
++        return match.group(0)
++
++    resolved = pattern.sub(repl, image)
++    return resolved, unresolved
++
++
++def _is_buildkit_enabled(client: docker.DockerClient) -> bool:
++    env_flag = os.getenv("DOCKER_BUILDKIT", "").strip().lower()
++    if env_flag in {"1", "true", "yes"}:
++        return True
++    try:
++        info = client.info()
++    except Exception:
++        return False
++    value = info.get("Buildkit")
++    if isinstance(value, bool):
++        return value
++    return False
++
++
++def _pull_base_images(
++    client: docker.DockerClient,
++    images: List[str],
++    build_args: Dict[str, str],
++    case_id: Optional[str] = None,
++) -> List[str]:
++    pulled = []
++    for image in images:
++        resolved_image, unresolved = _resolve_image_vars(image, build_args)
++        if unresolved:
++            if case_id:
++                publish_log(
++                    case_id,
++                    "system",
++                    f"[pull] Skip base image with unresolved vars: {image}",
++                )
++            continue
++        if case_id:
++            publish_log(case_id, "system", f"[pull] Pulling base image {resolved_image}")
++        last_error: Optional[Exception] = None
++        for attempt in range(1, 4):
++            try:
++                client.images.pull(resolved_image)
++                last_error = None
++                break
++            except docker.errors.APIError as exc:
++                last_error = exc
++                if case_id:
++                    publish_log(
++                        case_id,
++                        "system",
++                        f"[pull] Failed to pull {resolved_image} (attempt {attempt}/3)",
++                        level="ERROR",
++                    )
++                time.sleep(2 ** (attempt - 1))
++        if last_error is not None:
++            raise BuildError(
++                f"Failed to pull base image {resolved_image}. Check registry mirror / network / DNS.",
++                "DOCKER_BASE_IMAGE_PULL_FAILED",
++            ) from last_error
++        pulled.append(resolved_image)
++    return pulled
++
++
+ def publish_log(case_id: str, stream: str, line: str, level: str = "INFO") -> None:
+     payload = {"ts": _now_ts(), "stream": stream, "level": level, "line": line}
+     append_log(case_id, payload)
+@@ -117,11 +215,15 @@
+     if isinstance(exc, subprocess.TimeoutExpired):
+         return "TIMEOUT_CLONE", message
+     if isinstance(exc, docker.errors.BuildError):
++        if _is_network_error(message):
++            return "DOCKER_BUILD_NETWORK_FAILED", message
+         return "DOCKER_BUILD_FAILED", message
+     if isinstance(exc, docker.errors.APIError):
++        if _is_network_error(message):
++            return "DOCKER_BUILD_NETWORK_FAILED", message
+         return "DOCKER_API_ERROR", message
+     if isinstance(exc, FileNotFoundError) and "Dockerfile" in message:
+-        return "DOCKERFILE_MISSING", message
++        return "DOCKERFILE_NOT_FOUND", message
+     if "Container exited" in message:
+         return "CONTAINER_EXITED", (
+             "Container exited during startup. Ensure the process stays in the foreground."
+@@ -206,28 +308,50 @@
+     container_port: Optional[int] = None,
+     env: Optional[Dict[str, str]] = None,
+     auto_analyze: bool = False,
++    dockerfile_path: Optional[str] = None,
++    context_path: Optional[str] = None,
++    docker_build_network: Optional[str] = None,
++    docker_no_cache: Optional[bool] = None,
++    docker_build_args: Optional[Dict[str, str]] = None,
++    enable_submodules: Optional[bool] = None,
++    enable_lfs: Optional[bool] = None,
+ ) -> dict:
+     ref = normalize_ref(ref)
+     env = env or {}
++    docker_build_args = docker_build_args or {}
++    docker_build_network = docker_build_network or DOCKER_BUILD_NETWORK
++    docker_no_cache = DOCKER_BUILD_NO_CACHE if docker_no_cache is None else docker_no_cache
++    enable_submodules = GIT_ENABLE_SUBMODULES if enable_submodules is None else enable_submodules
++    enable_lfs = GIT_ENABLE_LFS if enable_lfs is None else enable_lfs
+     update_case(case_id, {"status": "CLONING", "stage": "clone"})
+     target_dir = Path(BUILD_ROOT) / case_id
+     host_port: Optional[int] = None
+     port_reserved = False
+     container_started = False
+     try:
+-        publish_log(case_id, "system", f"Cloning repo {repo_url} (ref {ref or 'auto'})...")
+-        clone_result = clone_repo(repo_url, ref, target_dir)
++        publish_log(case_id, "system", f"[clone] Cloning repo {repo_url} (ref {ref or 'auto'})...")
++        if enable_submodules:
++            publish_log(case_id, "system", "[clone] Submodule support enabled")
++        if enable_lfs:
++            publish_log(case_id, "system", "[clone] LFS support enabled")
++        clone_result = clone_repo(
++            repo_url,
++            ref,
++            target_dir,
++            enable_submodules=enable_submodules,
++            enable_lfs=enable_lfs,
++        )
+         if clone_result.resolved_ref and (ref in {None, 'auto'} or clone_result.used_fallback):
+             update_case(case_id, {"ref": clone_result.resolved_ref, "branch": clone_result.resolved_ref})
+         if clone_result.used_fallback:
+             publish_log(
+                 case_id,
+                 "system",
+-                f"Requested ref '{clone_result.requested_ref}' not found; fallback to '{clone_result.resolved_ref}'.",
++                f"[clone] Requested ref '{clone_result.requested_ref}' not found; fallback to '{clone_result.resolved_ref}'.",
+             )
+         elif clone_result.requested_ref in {None, "auto"} and clone_result.default_branch:
+-            publish_log(case_id, "system", f"Auto detected default branch '{clone_result.resolved_ref}'.")
+-        publish_log(case_id, "system", "Clone completed")
++            publish_log(case_id, "system", f"[clone] Auto detected default branch '{clone_result.resolved_ref}'.")
++        publish_log(case_id, "system", "[clone] Clone completed")
+         try:
+             commit_sha = (
+                 subprocess.check_output(
+@@ -240,8 +364,52 @@
+         if commit_sha:
+             update_case(case_id, {"commit_sha": commit_sha})
+             publish_log(case_id, "system", f"Checked out commit {commit_sha}")
+-        dockerfile = ensure_dockerfile(target_dir)
+-        resolved_port = container_port or detect_exposed_port(dockerfile)
++        publish_log(case_id, "system", "[preflight] Resolving Dockerfile")
++        try:
++            dockerfile_path_resolved, context_dir, candidates, used_auto = resolve_dockerfile(
++                target_dir,
++                dockerfile_path,
++                context_path,
++                DOCKERFILE_SEARCH_DEPTH,
++            )
++        except FileNotFoundError as exc:
++            raise BuildError(str(exc), "DOCKERFILE_NOT_FOUND") from exc
++
++        if not context_dir.exists():
++            raise BuildError(f"context_path not found: {context_dir}", "DOCKERFILE_NOT_FOUND")
++
++        if used_auto and candidates:
++            publish_log(
++                case_id,
++                "system",
++                f"[preflight] Dockerfile auto-selected: {candidates[0]} (candidates={candidates})",
++            )
++        elif dockerfile_path:
++            publish_log(case_id, "system", f"[preflight] Dockerfile path: {dockerfile_path}")
++
++        try:
++            dockerfile_rel = dockerfile_path_resolved.relative_to(context_dir)
++        except ValueError as exc:
++            raise BuildError("dockerfile_path must be under context_path", "DOCKERFILE_NOT_FOUND") from exc
++
++        dockerfile_rel_str = str(dockerfile_rel)
++        dockerfile_store = str(dockerfile_path_resolved.relative_to(target_dir))
++        context_store = str(context_dir.relative_to(target_dir))
++        context_store = context_store or "."
++        update_case(
++            case_id,
++            {
++                "dockerfile_path": dockerfile_store,
++                "context_path": context_store,
++                "docker_build_network": docker_build_network,
++                "docker_no_cache": docker_no_cache,
++                "build_arg_keys": sorted(docker_build_args.keys()),
++                "git_submodules": enable_submodules,
++                "git_lfs": enable_lfs,
++            },
++        )
++
++        resolved_port = container_port or detect_exposed_port(dockerfile_path_resolved)
+ 
+         existing = get_case(case_id) or {}
+         env_keys = sorted(env.keys()) if env else sorted(existing.get("env_keys") or [])
+@@ -256,10 +424,41 @@
+         )
+ 
+         client = docker.from_env()
++        from_info = parse_dockerfile_from(dockerfile_path_resolved)
++        publish_log(case_id, "system", f"[preflight] stages={from_info.stages}")
++        publish_log(
++            case_id,
++            "system",
++            f"[preflight] external_images_to_pull={from_info.external_images}",
++        )
++        if from_info.requires_buildkit and not _is_buildkit_enabled(client):
++            raise BuildError(
++                "BuildKit is required for this Dockerfile. Enable DOCKER_BUILDKIT=1 or daemon features.buildkit=true.",
++                "BUILDKIT_REQUIRED",
++            )
++        _pull_base_images(
++            client,
++            from_info.external_images,
++            docker_build_args,
++            case_id=case_id,
++        )
+         tag = f"case-{case_id}:latest"
+-        update_case(case_id, {"image_tag": tag})
+-
+-        for event in build_image(client, target_dir, tag):
++        update_case(case_id, {"image_tag": tag})
++
++        publish_log(
++            case_id,
++            "system",
++            f"[build] docker build (context={context_store}, dockerfile={dockerfile_rel_str}, network={docker_build_network}, no_cache={docker_no_cache})",
++        )
++        for event in build_image(
++            client,
++            context_dir,
++            tag,
++            dockerfile=Path(dockerfile_rel_str),
++            buildargs=docker_build_args,
++            network_mode=docker_build_network,
++            nocache=docker_no_cache,
++        ):
+             log_event(case_id, event)
+ 
+         update_case(case_id, {"status": "STARTING", "stage": "run"})
+@@ -305,7 +504,7 @@
+                 },
+             },
+         )
+-        publish_log(case_id, "system", f"Container started: {access_url}")
++        publish_log(case_id, "system", f"[run] Container started: {access_url}")
+         launch_log_stream(case_id, container_id)
+         if auto_analyze:
+             analyze_case.delay(case_id)
+@@ -385,7 +584,13 @@
+     target_dir = Path(MANUAL_ROOT) / case_id
+     try:
+         publish_log(case_id, "system", "Manual generation started")
+-        clone_result = clone_repo(repo_url, ref, target_dir)
++        clone_result = clone_repo(
++            repo_url,
++            ref,
++            target_dir,
++            enable_submodules=GIT_ENABLE_SUBMODULES,
++            enable_lfs=GIT_ENABLE_LFS,
++        )
+         if clone_result.used_fallback:
+             publish_log(
+                 case_id,
+--- main.py
++++ main.py
+@@ -84,6 +84,34 @@
+         description="Git branch (alias for ref). Optional; empty or 'auto' to auto-detect default branch.",
+     )
+     container_port: Optional[int] = Field(None, description="Container port override")
++    dockerfile_path: Optional[str] = Field(
++        None,
++        description="Optional Dockerfile path relative to repo root.",
++    )
++    context_path: Optional[str] = Field(
++        None,
++        description="Optional build context path relative to repo root.",
++    )
++    docker_build_network: Optional[str] = Field(
++        None,
++        description="Docker build network mode (bridge/host).",
++    )
++    docker_no_cache: Optional[bool] = Field(
++        None,
++        description="Disable docker build cache.",
++    )
++    docker_build_args: Dict[str, str] = Field(
++        default_factory=dict,
++        description="Docker build arguments (values are not stored).",
++    )
++    enable_submodules: Optional[bool] = Field(
++        None,
++        description="Enable git submodule update after clone.",
++    )
++    enable_lfs: Optional[bool] = Field(
++        None,
++        description="Enable git lfs pull after clone.",
++    )
+     env: Dict[str, str] = Field(
+         default_factory=dict,
+         description="Environment variables (values are not stored).",
+@@ -106,6 +134,10 @@
+         default_factory=dict,
+         description="Optional env override for retry (values are not stored).",
+     )
++    docker_build_args: Dict[str, str] = Field(
++        default_factory=dict,
++        description="Optional build args override for retry (values are not stored).",
++    )
+ 
+ 
+ class RuntimeInfo(BaseModel):
+@@ -136,6 +168,13 @@
+     ref: Optional[str] = None
+     branch: Optional[str] = None
+     container_port: Optional[int] = None
++    dockerfile_path: Optional[str] = None
++    context_path: Optional[str] = None
++    docker_build_network: Optional[str] = None
++    docker_no_cache: Optional[bool] = None
++    build_arg_keys: List[str] = Field(default_factory=list)
++    git_submodules: Optional[bool] = None
++    git_lfs: Optional[bool] = None
+     container_id: Optional[str] = None
+     host_port: Optional[int] = None
+     access_url: Optional[str] = None
+@@ -254,6 +293,13 @@
+         ref=ref_value,
+         branch=branch_value,
+         container_port=data.get("container_port"),
++        dockerfile_path=data.get("dockerfile_path"),
++        context_path=data.get("context_path"),
++        docker_build_network=data.get("docker_build_network"),
++        docker_no_cache=data.get("docker_no_cache"),
++        build_arg_keys=sorted(data.get("build_arg_keys") or []),
++        git_submodules=data.get("git_submodules"),
++        git_lfs=data.get("git_lfs"),
+         container_id=container_id,
+         host_port=host_port,
+         access_url=access_url,
+@@ -405,6 +451,7 @@
+     case_id = f"c_{uuid.uuid4().hex[:6]}"
+     now = time.time()
+     env_keys = sorted(list((payload.env or {}).keys()))
++    build_arg_keys = sorted(list((payload.docker_build_args or {}).keys()))
+     data: Dict[str, Any] = {
+         "case_id": case_id,
+         "status": "PENDING",
+@@ -413,6 +460,13 @@
+         "ref": ref,
+         "branch": ref,
+         "container_port": payload.container_port,
++        "dockerfile_path": payload.dockerfile_path,
++        "context_path": payload.context_path,
++        "docker_build_network": payload.docker_build_network,
++        "docker_no_cache": payload.docker_no_cache,
++        "build_arg_keys": build_arg_keys,
++        "git_submodules": payload.enable_submodules,
++        "git_lfs": payload.enable_lfs,
+         "env_keys": env_keys,
+         "report_ready": False,
+         "created_at": now,
+@@ -442,6 +496,13 @@
+         payload.container_port,
+         payload.env,
+         payload.auto_analyze,
++        payload.dockerfile_path,
++        payload.context_path,
++        payload.docker_build_network,
++        payload.docker_no_cache,
++        payload.docker_build_args,
++        payload.enable_submodules,
++        payload.enable_lfs,
+     )
+     if AUTO_MANUAL:
+         update_case(case_id, {"manual_status": "PENDING"})
+@@ -457,7 +518,12 @@
+     return build_case_response(case_id, data)
+ 
+ 
+-def handle_case_action(case_id: str, action: str, env: Optional[Dict[str, str]] = None) -> CaseActionResponse:
++def handle_case_action(
++    case_id: str,
++    action: str,
++    env: Optional[Dict[str, str]] = None,
++    build_args: Optional[Dict[str, str]] = None,
++) -> CaseActionResponse:
+     data = get_case_or_404(case_id)
+     action_key = action.lower()
+     runtime = data.get("runtime") or {}
+@@ -541,9 +607,19 @@
+         ref = data.get("ref") or data.get("branch")
+         container_port = data.get("container_port")
+         retry_env = env or {}
++        retry_build_args = build_args or {}
+         env_keys = sorted(retry_env.keys()) if retry_env else sorted(data.get("env_keys") or [])
++        build_arg_keys = (
++            sorted(retry_build_args.keys()) if retry_build_args else sorted(data.get("build_arg_keys") or [])
++        )
+         attempt = int(data.get("attempt") or 1) + 1
+         retry_of = data.get("retry_of") or case_id
++        dockerfile_path = data.get("dockerfile_path")
++        context_path = data.get("context_path")
++        docker_build_network = data.get("docker_build_network")
++        docker_no_cache = data.get("docker_no_cache")
++        git_submodules = data.get("git_submodules")
++        git_lfs = data.get("git_lfs")
+         update_case(
+             case_id,
+             {
+@@ -552,12 +628,27 @@
+                 "error_code": None,
+                 "error_message": None,
+                 "env_keys": env_keys,
++                "build_arg_keys": build_arg_keys,
+                 "attempt": attempt,
+                 "retry_of": retry_of,
+             },
+         )
+         append_system_log(case_id, "Retry requested")
+-        build_and_run.delay(case_id, repo_url, ref, container_port, retry_env, False)
++        build_and_run.delay(
++            case_id,
++            repo_url,
++            ref,
++            container_port,
++            retry_env,
++            False,
++            dockerfile_path,
++            context_path,
++            docker_build_network,
++            docker_no_cache,
++            retry_build_args,
++            git_submodules,
++            git_lfs,
++        )
+         return CaseActionResponse(case_id=case_id, action=action_key, status="PENDING", message="Retry started")
+ 
+     if action_key == "archive":
+@@ -589,7 +680,8 @@
+     payload: CaseRetryRequest = Body(default_factory=CaseRetryRequest),
+ ) -> CaseActionResponse:
+     env = payload.env
+-    return handle_case_action(case_id, "retry", env)
++    build_args = payload.docker_build_args
++    return handle_case_action(case_id, "retry", env, build_args)
+ 
+ 
+ @app.post("/cases/{case_id}/archive", response_model=CaseActionResponse)
+--- frontend/src/App.tsx
++++ frontend/src/App.tsx
+@@ -116,6 +116,10 @@
+   DOCKER_BUILD_FAILED: "Docker 镜像构建失败，请检查 Dockerfile 与构建日志。",
+   DOCKER_API_ERROR: "Docker 守护进程错误，请确认 Docker 正常运行且端口未被占用。",
+   DOCKERFILE_MISSING: "仓库根目录缺少 Dockerfile。",
++  DOCKERFILE_NOT_FOUND: "未找到 Dockerfile，请检查 dockerfile_path/context_path。",
++  DOCKER_BASE_IMAGE_PULL_FAILED: "基础镜像拉取失败，请检查 registry mirror 或网络。",
++  DOCKER_BUILD_NETWORK_FAILED: "构建网络失败，请检查 DNS/代理或构建网络模式。",
++  BUILDKIT_REQUIRED: "需要启用 Docker BuildKit（DOCKER_BUILDKIT=1）。",
+   GIT_CLONE_FAILED: "Git 克隆失败，请检查仓库地址与权限。",
+   GIT_REF_NOT_FOUND: "分支不存在，请改用默认分支或留空自动识别。",
+   GIT_CLONE_TIMEOUT: "Git 克隆超时，请重试或使用更小的仓库。",
+--- /dev/null
++++ build_remote_vs_local.md
+@@ -0,0 +1,72 @@
++# Remote vs Local 构建诊断报告
++
++## 1) 现象与结论
++- 现象：本地路径仓库可构建，GitHub URL 仓库即便有 Dockerfile 也可能失败。
++- 结论：根因主要集中在 **Dockerfile 路径不一致**、**基础镜像拉取失败**、**网络/DNS 问题**、**LFS/Submodule 未初始化** 等环节。已通过 preflight 与错误码体系实现可诊断、可配置、可回归。
++
++## 2) 根因分类与诊断要点
++1) Dockerfile 路径不一致
++- 远程仓库 Dockerfile 不在根目录或 context 不一致。
++- 现改造：支持 `dockerfile_path/context_path`，并在 clone 后向下搜索 2 层自动定位。
++
++2) Multi-stage Dockerfile 误判（已修复）
++- 现象：将 stage 名当作外部镜像拉取（如 `app-base`），触发 `DOCKER_BASE_IMAGE_PULL_FAILED`。
++- 修复：解析 FROM flags/AS，区分 stages 与 external images；preflight 仅拉取外部镜像并打印列表。
++
++3) 基础镜像拉取失败（网络/registry）
++- 典型表现：拉取超时、EOF、DNS 解析失败。
++- 现改造：preflight 阶段解析 Dockerfile 的 FROM 列表，逐一 `docker pull`（3 次重试+退避）。
++- 失败即中止，返回 `DOCKER_BASE_IMAGE_PULL_FAILED`。
++
++4) 构建网络/DNS 失败
++- 典型表现：`Temporary failure in name resolution`、`dial tcp`、`i/o timeout`。
++- 现改造：识别并映射 `DOCKER_BUILD_NETWORK_FAILED`，可通过 `docker_build_network=host` 规避网络解析问题。
++
++5) Submodule / LFS 未初始化
++- 远程仓库包含 `.gitmodules` 或 LFS 指针文件，但未拉取子模块或 LFS 内容。
++- 现改造：可通过 `enable_submodules/enable_lfs` 开关启用（默认关闭）。
++
++## 3) 新增错误码与排障步骤
++- `DOCKERFILE_NOT_FOUND`
++  - 排障：
++    - 检查目录：`find . -maxdepth 3 -name Dockerfile`
++    - 指定参数：`dockerfile_path` / `context_path`
++- `DOCKER_BASE_IMAGE_PULL_FAILED`
++  - 排障：
++    - 手动拉取：`docker pull <image>`
++    - 检查镜像源/代理/DNS
++- `DOCKER_BUILD_NETWORK_FAILED`
++  - 排障：
++    - 切换网络：`docker_build_network=host`
++    - 检查 DNS/代理
++- `BUILDKIT_REQUIRED`
++  - 排障：
++    - 启用：`DOCKER_BUILDKIT=1` 或 daemon 配置 `features.buildkit=true`
++- `GIT_REF_NOT_FOUND`
++  - 排障：
++    - `git ls-remote --symref <url> HEAD`
++    - ref 留空或设为 `auto`
++
++## 4) 关键增强点
++- Clone 后 preflight：Dockerfile 解析 + 基础镜像拉取 + 自动定位。
++- BuildKit 检测：出现 BuildKit 特性时 fail-fast（`BUILDKIT_REQUIRED`）。
++- Build 过程可配置：`docker_build_network`、`docker_no_cache`、`docker_build_args`。
++- 结构化日志：`[clone]/[preflight]/[pull]/[build]/[run]`。
++- 可回归测试脚本：`scripts/integration_tests.py`。
++
++## 5) 回归测试摘要
++- 结果文件：`.devlogs/integration_test_results.json`
++- 用例 1：ref=auto clone 成功（失败原因为 `DOCKERFILE_NOT_FOUND`）
++- 用例 2：ref=master fallback 成功
++- 用例 3：Dockerfile 子目录指定 `dockerfile_path/context_path` -> RUNNING
++- 用例 4：基础镜像不存在 -> preflight 直接 `DOCKER_BASE_IMAGE_PULL_FAILED`
++
++## 6) 建议
++- 对仓库 README 标注 Dockerfile 路径与启动说明。
++- 配置镜像源与 DNS（尤其在 WSL/企业网络下）。
++- 为含子模块/大文件的仓库开启 `enable_submodules/enable_lfs`。
++
++## 7) 变更应用与回滚
++- Patch：`build_remote_vs_local.patch`
++- 应用：`patch -p0 < build_remote_vs_local.patch`
++- 回滚：`patch -R -p0 < build_remote_vs_local.patch`
+--- /dev/null
++++ integration_tests.md
+@@ -0,0 +1,24 @@
++# Integration Tests
++
++## Prereqs
++- 后端已启动：`./dev.sh up`
++- Docker 可用；如端口 30000 被占用，请先停止带 `antihub.managed=true` 标签的容器。
++
++## 运行
++```bash
++python3 scripts/integration_tests.py
++```
++
++## 输出
++- 结果文件：`.devlogs/integration_test_results.json`
++- 每个用例包含：case_id / status / error_code / 日志片段匹配结果。
++
++## 用例说明
++1) `auto_default_branch`
++- 使用远程 GitHub 仓库，ref=auto，验证 clone 成功（即便后续 Dockerfile 缺失）。
++2) `fallback_master`
++- ref=master 不存在时自动 fallback，验证 fallback 日志。
++3) `dockerfile_subdir`
++- Dockerfile 在子目录，指定 `dockerfile_path/context_path`，应 RUNNING。
++4) `bad_base_image`
++- 基础镜像不可拉取，preflight 直接失败并返回 `DOCKER_BASE_IMAGE_PULL_FAILED`。
+--- /dev/null
++++ scripts/integration_tests.py
+@@ -0,0 +1,129 @@
++import json
++import os
++import sys
++import time
++from pathlib import Path
++from urllib import request
++
++API = os.getenv("API_BASE", "http://127.0.0.1:8010")
++LOG_DIR = Path(os.getenv("LOG_DIR", ".devlogs"))
++LOG_DIR.mkdir(exist_ok=True)
++
++REPO_REMOTE = "https://github.com/Kevin7774/wechat-miniprogram-card"
++REPO_SUBDIR = str(Path("test-repos/docker-subdir").resolve())
++REPO_BAD_BASE = str(Path("test-repos/bad-base-image").resolve())
++
++
++def post_json(url, payload):
++    data = json.dumps(payload).encode("utf-8")
++    req = request.Request(url, data=data, headers={"Content-Type": "application/json"})
++    with request.urlopen(req, timeout=30) as resp:
++        return json.loads(resp.read().decode("utf-8"))
++
++
++def get_json(url):
++    with request.urlopen(url, timeout=30) as resp:
++        return json.loads(resp.read().decode("utf-8"))
++
++
++def get_logs(case_id, limit=200):
++    return get_json(f"{API}/cases/{case_id}/logs?limit={limit}")
++
++
++def wait_case(case_id, timeout=120):
++    end = time.time() + timeout
++    last = None
++    while time.time() < end:
++        last = get_json(f"{API}/cases/{case_id}")
++        status = (last.get("status") or "").upper()
++        if status in {"RUNNING", "FAILED"}:
++            if status == "FAILED" and last.get("error_code"):
++                return last
++            if status == "RUNNING":
++                return last
++        time.sleep(2)
++    return last
++
++
++def contains_log(logs, keyword):
++    for entry in logs:
++        if isinstance(entry, dict) and keyword in (entry.get("line") or ""):
++            return True
++    return False
++
++
++def run_test(name, payload, expect_status=None, expect_error=None, expect_log=None):
++    result = {"name": name, "payload": payload}
++    case = post_json(f"{API}/cases", payload)
++    case_id = case.get("case_id")
++    result["case_id"] = case_id
++    status = wait_case(case_id)
++    logs = get_logs(case_id, limit=200)
++    result["status"] = status
++    result["logs"] = logs
++
++    ok = True
++    if expect_status:
++        ok = ok and (status.get("status") == expect_status)
++    if expect_error:
++        ok = ok and (status.get("error_code") == expect_error)
++    if expect_log:
++        ok = ok and contains_log(logs, expect_log)
++    result["pass"] = ok
++    return result
++
++
++def main():
++    results = []
++
++    # 用例 1: ref=auto 成功 clone
++    results.append(
++        run_test(
++            "auto_default_branch",
++            {"repo_url": REPO_REMOTE, "ref": "auto"},
++            expect_error="DOCKERFILE_NOT_FOUND",
++            expect_log="[clone] Clone completed",
++        )
++    )
++
++    # 用例 2: ref=master fallback 成功
++    results.append(
++        run_test(
++            "fallback_master",
++            {"repo_url": REPO_REMOTE, "ref": "master"},
++            expect_error="DOCKERFILE_NOT_FOUND",
++            expect_log="fallback",
++        )
++    )
++
++    # 用例 3: Dockerfile 不在根目录，指定 dockerfile_path/context_path
++    results.append(
++        run_test(
++            "dockerfile_subdir",
++            {
++                "repo_url": REPO_SUBDIR,
++                "dockerfile_path": "app/Dockerfile",
++                "context_path": "app",
++            },
++            expect_status="RUNNING",
++        )
++    )
++
++    # 用例 4: 基础镜像拉取失败
++    results.append(
++        run_test(
++            "bad_base_image",
++            {"repo_url": REPO_BAD_BASE},
++            expect_error="DOCKER_BASE_IMAGE_PULL_FAILED",
++            expect_log="[pull]",
++        )
++    )
++
++    summary = {"results": results, "passed": all(item["pass"] for item in results)}
++    output = LOG_DIR / "integration_test_results.json"
++    output.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
++    print(json.dumps(summary, indent=2, ensure_ascii=False))
++
++
++if __name__ == "__main__":
++    main()
+--- /dev/null
++++ test-repos/docker-subdir/README.md
+@@ -0,0 +1,3 @@
++# docker-subdir
++
++Dockerfile 位于子目录 app/。
+--- /dev/null
++++ test-repos/docker-subdir/app/Dockerfile
+@@ -0,0 +1,5 @@
++FROM python:3.11-slim
++WORKDIR /app
++COPY index.html /app/index.html
++EXPOSE 8000
++CMD ["python", "-m", "http.server", "8000", "--bind", "0.0.0.0"]
+--- /dev/null
++++ test-repos/docker-subdir/app/index.html
+@@ -0,0 +1,5 @@
++<!doctype html>
++<html>
++  <head><meta charset="utf-8"><title>Docker Subdir</title></head>
++  <body>Hello from docker-subdir</body>
++</html>
+--- /dev/null
++++ test-repos/bad-base-image/README.md
+@@ -0,0 +1,3 @@
++# bad-base-image
++
++Dockerfile 使用不存在的基础镜像，预期在 preflight 拉取阶段失败。
+--- /dev/null
++++ test-repos/bad-base-image/Dockerfile
+@@ -0,0 +1,3 @@
++FROM thisdoesnotexist/antihub-nonexistent:0.0.1
++EXPOSE 8000
++CMD ["python", "-m", "http.server", "8000", "--bind", "0.0.0.0"]
+--- /dev/null
++++ tests/fixtures/Dockerfile.multi-stage
+@@ -0,0 +1,14 @@
++# syntax=docker/dockerfile:1
++FROM --platform=$BUILDPLATFORM python:alpine AS base
++RUN echo base
++
++FROM --platform=$BUILDPLATFORM node:18-alpine AS app-base
++RUN echo app
++
++FROM app-base AS test
++RUN echo test
++
++FROM --platform=$BUILDPLATFORM base AS dev
++RUN echo dev
++
++FROM --platform=$TARGETPLATFORM nginx:alpine
+--- /dev/null
++++ tests/test_dockerfile_preflight.py
+@@ -0,0 +1,33 @@
++import unittest
++from pathlib import Path
++from unittest import mock
++
++from docker_ops import parse_dockerfile_from
++import worker
++
++FIXTURE = Path(__file__).parent / "fixtures" / "Dockerfile.multi-stage"
++
++
++class DockerfilePreflightTests(unittest.TestCase):
++    def test_parse_multistage_images_and_stages(self) -> None:
++        info = parse_dockerfile_from(FIXTURE)
++        self.assertEqual(
++            info.external_images,
++            ["python:alpine", "node:18-alpine", "nginx:alpine"],
++        )
++        self.assertEqual(info.stages, ["base", "app-base", "test", "dev"])
++        self.assertTrue(info.requires_buildkit)
++
++    def test_preflight_pull_images_only(self) -> None:
++        info = parse_dockerfile_from(FIXTURE)
++        client = mock.Mock()
++        client.images.pull = mock.Mock()
++        worker._pull_base_images(client, info.external_images, {}, case_id=None)
++        pulled = [call.args[0] for call in client.images.pull.call_args_list]
++        self.assertEqual(pulled, info.external_images)
++        self.assertNotIn("base", pulled)
++        self.assertNotIn("app-base", pulled)
++
++
++if __name__ == "__main__":
++    unittest.main()

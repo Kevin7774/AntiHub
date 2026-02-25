@@ -1,0 +1,1437 @@
+--- config.py
++++ config.py
+@@ -22,6 +22,9 @@
+     ).split(",")
+     if origin.strip()
+ ]
++
++CASE_LABEL_KEY = os.getenv("CASE_LABEL_KEY", "antihub.case_id")
++CASE_LABEL_MANAGED = os.getenv("CASE_LABEL_MANAGED", "antihub.managed")
+ 
+ GIT_CLONE_TIMEOUT_SECONDS = int(os.getenv("GIT_CLONE_TIMEOUT_SECONDS", "120"))
+ DOCKER_BUILD_TIMEOUT_SECONDS = int(os.getenv("DOCKER_BUILD_TIMEOUT_SECONDS", "1800"))
+--- docker_ops.py
++++ docker_ops.py
+@@ -66,12 +66,14 @@
+     image: str,
+     container_port: int,
+     environment: Optional[Dict[str, str]] = None,
++    labels: Optional[Dict[str, str]] = None,
+ ) -> Tuple[str, int]:
+     container = client.containers.run(
+         image,
+         detach=True,
+         ports={f"{container_port}/tcp": None},
+         environment=environment or {},
++        labels=labels or {},
+     )
+     container.reload()
+     ports = container.attrs.get("NetworkSettings", {}).get("Ports", {})
+@@ -88,12 +90,14 @@
+     container_port: int,
+     host_port: int,
+     environment: Optional[Dict[str, str]] = None,
++    labels: Optional[Dict[str, str]] = None,
+ ) -> str:
+     container = client.containers.run(
+         image,
+         detach=True,
+         ports={f"{container_port}/tcp": host_port},
+         environment=environment or {},
++        labels=labels or {},
+     )
+     return container.id
+ 
+--- main.py
++++ main.py
+@@ -1,15 +1,37 @@
+ from __future__ import annotations
+ 
++import json
+ import time
+ import uuid
+ from typing import Any, Dict, List, Optional
+ 
+-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
++import docker
++from fastapi import Body, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+ from fastapi.middleware.cors import CORSMiddleware
++from fastapi.responses import PlainTextResponse, StreamingResponse
+ from pydantic import BaseModel, ConfigDict, Field
+ 
+-from config import CORS_ORIGINS, DEFAULT_BRANCH
+-from storage import decode_log_entry, get_async_redis_client, get_case, get_logs, log_channel, set_case
++from config import (
++    CASE_LABEL_KEY,
++    CASE_LABEL_MANAGED,
++    CORS_ORIGINS,
++    DEFAULT_BRANCH,
++    PUBLIC_HOST,
++    STARTUP_TIMEOUT_SECONDS,
++)
++from docker_ops import wait_for_container_running
++from storage import (
++    append_log,
++    decode_log_entry,
++    get_async_redis_client,
++    get_case,
++    get_logs,
++    get_logs_slice,
++    list_case_ids,
++    log_channel,
++    set_case,
++    update_case,
++)
+ from worker import analyze_case, build_and_run
+ 
+ app = FastAPI(title="Agent Platform", version="0.2.0")
+@@ -28,6 +50,7 @@
+     "BUILDING": "build",
+     "STARTING": "run",
+     "RUNNING": "run",
++    "STOPPED": "run",
+     "FINISHED": "run",
+     "FAILED": "system",
+     "ANALYZING": "analyze",
+@@ -61,6 +84,21 @@
+     model_config = ConfigDict(extra="ignore")
+ 
+ 
++class CaseActionRequest(BaseModel):
++    action: str = Field(..., description="stop | restart | retry | archive")
++    env: Dict[str, str] = Field(
++        default_factory=dict,
++        description="Optional env override for retry (values are not stored).",
++    )
++
++
++class CaseRetryRequest(BaseModel):
++    env: Dict[str, str] = Field(
++        default_factory=dict,
++        description="Optional env override for retry (values are not stored).",
++    )
++
++
+ class RuntimeInfo(BaseModel):
+     container_id: Optional[str] = None
+     host_port: Optional[int] = None
+@@ -81,6 +119,10 @@
+     error_message: Optional[str] = None
+     created_at: Optional[float] = None
+     updated_at: Optional[float] = None
++    archived: bool = False
++    archived_at: Optional[float] = None
++    attempt: Optional[int] = None
++    retry_of: Optional[str] = None
+     repo_url: Optional[str] = None
+     ref: Optional[str] = None
+     branch: Optional[str] = None
+@@ -93,6 +135,20 @@
+     report_ready: bool = False
+ 
+ 
++class CaseListResponse(BaseModel):
++    items: List[CaseResponse]
++    total: int
++    page: int
++    size: int
++
++
++class CaseActionResponse(BaseModel):
++    case_id: str
++    action: str
++    status: str
++    message: str
++
++
+ def normalize_stage(raw_stage: Optional[str], status: Optional[str]) -> str:
+     if raw_stage:
+         normalized = raw_stage.lower()
+@@ -142,6 +198,10 @@
+         error_message=error_message,
+         created_at=data.get("created_at"),
+         updated_at=data.get("updated_at"),
++        archived=bool(data.get("archived", False)),
++        archived_at=data.get("archived_at"),
++        attempt=data.get("attempt"),
++        retry_of=data.get("retry_of"),
+         repo_url=data.get("repo_url"),
+         ref=ref_value,
+         branch=branch_value,
+@@ -155,11 +215,91 @@
+     )
+ 
+ 
++def matches_query(case_id: str, data: Dict[str, Any], query: str) -> bool:
++    q = query.lower().strip()
++    if not q:
++        return True
++    haystacks = [
++        case_id,
++        str(data.get("repo_url") or ""),
++        str(data.get("ref") or data.get("branch") or ""),
++    ]
++    return any(q in (value or "").lower() for value in haystacks)
++
++
++def get_case_or_404(case_id: str) -> Dict[str, Any]:
++    data = get_case(case_id) or {}
++    if not data:
++        raise HTTPException(status_code=404, detail="Case not found")
++    return data
++
++
++def get_managed_container(case_id: str, container_id: str) -> docker.models.containers.Container:
++    client = docker.from_env()
++    container = client.containers.get(container_id)
++    labels = container.labels or {}
++    if labels.get(CASE_LABEL_KEY) != case_id or labels.get(CASE_LABEL_MANAGED) != "true":
++        raise HTTPException(status_code=400, detail="Container is not managed by AntiHub")
++    return container
++
++
++def append_system_log(case_id: str, line: str, level: str = "INFO") -> None:
++    append_log(case_id, {"ts": time.time(), "stream": "system", "level": level, "line": line})
++
++
++def build_jsonl(entries: List[Dict[str, Any]]) -> str:
++    return "\n".join(json.dumps(entry, ensure_ascii=False) for entry in entries) + ("\n" if entries else "")
++
++
++def resolve_host_port(container: docker.models.containers.Container, container_port: Optional[int]) -> Optional[int]:
++    ports = container.attrs.get("NetworkSettings", {}).get("Ports", {}) or {}
++    if container_port:
++        binding = ports.get(f"{container_port}/tcp")
++        if binding:
++            return int(binding[0]["HostPort"])
++    for binding in ports.values():
++        if binding:
++            return int(binding[0]["HostPort"])
++    return None
++
++
+ @app.get("/healthz")
+ async def healthz() -> dict:
+     return {"status": "ok"}
+ 
+ 
++@app.get("/cases", response_model=CaseListResponse)
++async def list_cases(
++    q: Optional[str] = Query(None, description="Search by case_id/repo/ref"),
++    status: Optional[str] = Query(None, description="Filter by status"),
++    stage: Optional[str] = Query(None, description="Filter by stage"),
++    page: int = Query(1, ge=1, description="Page number"),
++    size: int = Query(20, ge=1, le=200, description="Page size"),
++    include_archived: bool = Query(False, description="Include archived cases"),
++) -> CaseListResponse:
++    ids = list_case_ids()
++    items: List[CaseResponse] = []
++    for case_id in ids:
++        data = get_case(case_id) or {}
++        if not data:
++            continue
++        if not include_archived and bool(data.get("archived", False)):
++            continue
++        if status and (data.get("status") or "").upper() != status.upper():
++            continue
++        normalized_stage = normalize_stage(data.get("stage"), data.get("status"))
++        if stage and normalized_stage != stage.lower():
++            continue
++        if q and not matches_query(case_id, data, q):
++            continue
++        items.append(build_case_response(case_id, data))
++    items.sort(key=lambda item: item.updated_at or item.created_at or 0, reverse=True)
++    total = len(items)
++    start = (page - 1) * size
++    end = start + size
++    return CaseListResponse(items=items[start:end], total=total, page=page, size=size)
++
++
+ @app.post("/cases", response_model=CaseResponse)
+ async def create_case(payload: CaseCreateRequest) -> CaseResponse:
+     repo_url = payload.repo_url or payload.git_url
+@@ -181,6 +321,10 @@
+         "report_ready": False,
+         "created_at": now,
+         "updated_at": now,
++        "archived": False,
++        "archived_at": None,
++        "attempt": 1,
++        "retry_of": None,
+         "runtime": {
+             "container_id": None,
+             "host_port": None,
+@@ -204,13 +348,143 @@
+ 
+ @app.get("/cases/{case_id}", response_model=CaseResponse)
+ async def get_case_status(case_id: str) -> CaseResponse:
+-    data = get_case(case_id) or {}
+-    if not data:
+-        raise HTTPException(status_code=404, detail="Case not found")
++    data = get_case_or_404(case_id)
+     data.pop("case_id", None)
+     return build_case_response(case_id, data)
+ 
+ 
++def handle_case_action(case_id: str, action: str, env: Optional[Dict[str, str]] = None) -> CaseActionResponse:
++    data = get_case_or_404(case_id)
++    action_key = action.lower()
++    runtime = data.get("runtime") or {}
++    container_id = data.get("container_id") or runtime.get("container_id")
++
++    if action_key == "stop":
++        if not container_id:
++            raise HTTPException(status_code=400, detail="No running container for case")
++        container = get_managed_container(case_id, container_id)
++        try:
++            container.stop(timeout=10)
++        except Exception:
++            container.kill()
++        container.reload()
++        exit_code = container.attrs.get("State", {}).get("ExitCode")
++        update_case(
++            case_id,
++            {
++                "status": "STOPPED",
++                "stage": "run",
++                "error_code": "STOPPED_BY_USER",
++                "error_message": "Stopped by user",
++                "runtime": {
++                    **runtime,
++                    "exited_at": time.time(),
++                    "exit_code": exit_code,
++                },
++            },
++        )
++        append_system_log(case_id, "Container stopped by user")
++        return CaseActionResponse(case_id=case_id, action=action_key, status="STOPPED", message="Stopped")
++
++    if action_key == "restart":
++        if not container_id:
++            raise HTTPException(status_code=400, detail="No existing container to restart")
++        container = get_managed_container(case_id, container_id)
++        container.start()
++        wait_for_container_running(docker.from_env(), container_id, STARTUP_TIMEOUT_SECONDS)
++        container.reload()
++        container_port = data.get("container_port")
++        host_port = data.get("host_port") or runtime.get("host_port") or resolve_host_port(container, container_port)
++        access_url = data.get("access_url") or runtime.get("access_url")
++        if host_port and not access_url:
++            access_url = f"http://{PUBLIC_HOST}:{host_port}"
++        update_case(
++            case_id,
++            {
++                "status": "RUNNING",
++                "stage": "run",
++                "error_code": None,
++                "error_message": None,
++                "container_id": container_id,
++                "host_port": host_port,
++                "access_url": access_url,
++                "runtime": {
++                    **runtime,
++                    "container_id": container_id,
++                    "host_port": host_port,
++                    "access_url": access_url,
++                    "started_at": time.time(),
++                    "exited_at": None,
++                    "exit_code": None,
++                },
++            },
++        )
++        append_system_log(case_id, "Container restarted")
++        return CaseActionResponse(case_id=case_id, action=action_key, status="RUNNING", message="Restarted")
++
++    if action_key == "retry":
++        repo_url = data.get("repo_url")
++        if not repo_url:
++            raise HTTPException(status_code=400, detail="Missing repo_url for retry")
++        ref = data.get("ref") or data.get("branch") or DEFAULT_BRANCH
++        container_port = data.get("container_port")
++        retry_env = env or {}
++        env_keys = sorted(retry_env.keys()) if retry_env else sorted(data.get("env_keys") or [])
++        attempt = int(data.get("attempt") or 1) + 1
++        retry_of = data.get("retry_of") or case_id
++        update_case(
++            case_id,
++            {
++                "status": "PENDING",
++                "stage": "system",
++                "error_code": None,
++                "error_message": None,
++                "env_keys": env_keys,
++                "attempt": attempt,
++                "retry_of": retry_of,
++            },
++        )
++        append_system_log(case_id, "Retry requested")
++        build_and_run.delay(case_id, repo_url, ref, container_port, retry_env, False)
++        return CaseActionResponse(case_id=case_id, action=action_key, status="PENDING", message="Retry started")
++
++    if action_key == "archive":
++        update_case(case_id, {"archived": True, "archived_at": time.time()})
++        append_system_log(case_id, "Case archived")
++        return CaseActionResponse(case_id=case_id, action=action_key, status="ARCHIVED", message="Archived")
++
++    raise HTTPException(status_code=400, detail="Unsupported action")
++
++
++@app.post("/cases/{case_id}/actions", response_model=CaseActionResponse)
++async def case_actions(case_id: str, payload: CaseActionRequest) -> CaseActionResponse:
++    return handle_case_action(case_id, payload.action, payload.env)
++
++
++@app.post("/cases/{case_id}/stop", response_model=CaseActionResponse)
++async def case_stop(case_id: str) -> CaseActionResponse:
++    return handle_case_action(case_id, "stop")
++
++
++@app.post("/cases/{case_id}/restart", response_model=CaseActionResponse)
++async def case_restart(case_id: str) -> CaseActionResponse:
++    return handle_case_action(case_id, "restart")
++
++
++@app.post("/cases/{case_id}/retry", response_model=CaseActionResponse)
++async def case_retry(
++    case_id: str,
++    payload: CaseRetryRequest = Body(default_factory=CaseRetryRequest),
++) -> CaseActionResponse:
++    env = payload.env
++    return handle_case_action(case_id, "retry", env)
++
++
++@app.post("/cases/{case_id}/archive", response_model=CaseActionResponse)
++async def case_archive(case_id: str) -> CaseActionResponse:
++    return handle_case_action(case_id, "archive")
++
++
+ @app.post("/cases/{case_id}/analyze")
+ async def trigger_analyze(case_id: str) -> Dict[str, str]:
+     data = get_case(case_id)
+@@ -254,5 +528,27 @@
+ 
+ 
+ @app.get("/cases/{case_id}/logs")
+-async def http_logs(case_id: str) -> List[Dict[str, Any]]:
+-    return get_logs(case_id)
++async def http_logs(
++    case_id: str,
++    limit: int = Query(200, ge=1, le=2000, description="Number of lines from tail"),
++    offset: int = Query(0, ge=0, description="Offset from tail"),
++    format: Optional[str] = Query(None, description="json | jsonl"),
++) -> Any:
++    get_case_or_404(case_id)
++    entries = get_logs_slice(case_id, offset=offset, limit=limit)
++    if format == "jsonl":
++        return PlainTextResponse(build_jsonl(entries), media_type="application/jsonl")
++    return entries
++
++
++@app.get("/cases/{case_id}/logs/download")
++async def download_logs(
++    case_id: str,
++    limit: int = Query(1000, ge=1, le=2000, description="Number of lines from tail"),
++    offset: int = Query(0, ge=0, description="Offset from tail"),
++) -> StreamingResponse:
++    get_case_or_404(case_id)
++    entries = get_logs_slice(case_id, offset=offset, limit=limit)
++    payload = build_jsonl(entries).encode("utf-8")
++    headers = {"Content-Disposition": f"attachment; filename={case_id}.jsonl"}
++    return StreamingResponse(iter([payload]), media_type="application/jsonl", headers=headers)
+--- storage.py
++++ storage.py
+@@ -39,6 +39,19 @@
+     return {key: json.loads(value) for key, value in raw.items()}
+ 
+ 
++def list_case_ids() -> List[str]:
++    client = get_redis_client()
++    cursor = 0
++    keys: List[str] = []
++    pattern = f"{CASE_PREFIX}*"
++    while True:
++        cursor, batch = client.scan(cursor=cursor, match=pattern, count=200)
++        keys.extend(batch)
++        if cursor == 0:
++            break
++    return [key.replace(CASE_PREFIX, "", 1) for key in keys]
++
++
+ def append_log(case_id: str, message: LogRaw) -> Dict[str, Any]:
+     client = get_redis_client()
+     payload = _decode_log_entry(message)
+@@ -57,6 +70,21 @@
+     return [_decode_log_entry(entry) for entry in entries]
+ 
+ 
++def get_logs_slice(case_id: str, offset: int = 0, limit: int = 200) -> List[Dict[str, Any]]:
++    if limit <= 0:
++        return []
++    if offset < 0:
++        offset = 0
++    entries = get_logs(case_id)
++    if not entries:
++        return []
++    end = len(entries) - offset
++    if end <= 0:
++        return []
++    start = max(0, end - limit)
++    return entries[start:end]
++
++
+ def log_channel(case_id: str) -> str:
+     return f"{WS_LOG_CHANNEL_PREFIX}{case_id}"
+ 
+--- worker.py
++++ worker.py
+@@ -11,6 +11,8 @@
+ 
+ from config import (
+     BUILD_ROOT,
++    CASE_LABEL_KEY,
++    CASE_LABEL_MANAGED,
+     DEFAULT_BRANCH,
+     DOCKER_BUILD_TIMEOUT_SECONDS,
+     PORT_MODE,
+@@ -188,13 +190,15 @@
+         dockerfile = ensure_dockerfile(target_dir)
+         resolved_port = container_port or detect_exposed_port(dockerfile)
+ 
++        existing = get_case(case_id) or {}
++        env_keys = sorted(env.keys()) if env else sorted(existing.get("env_keys") or [])
+         update_case(
+             case_id,
+             {
+                 "status": "BUILDING",
+                 "stage": "build",
+                 "container_port": resolved_port,
+-                "env_keys": sorted(env.keys()),
++                "env_keys": env_keys,
+             },
+         )
+ 
+@@ -207,11 +211,25 @@
+ 
+         update_case(case_id, {"status": "STARTING", "stage": "run"})
+ 
++        labels = {CASE_LABEL_KEY: case_id, CASE_LABEL_MANAGED: "true"}
+         if PORT_MODE == "dynamic":
+-            container_id, host_port = run_container_dynamic(client, tag, resolved_port, env)
++            container_id, host_port = run_container_dynamic(
++                client,
++                tag,
++                resolved_port,
++                env,
++                labels=labels,
++            )
+         else:
+             host_port = reserve_port(case_id)
+-            container_id = run_container_fixed(client, tag, resolved_port, host_port, env)
++            container_id = run_container_fixed(
++                client,
++                tag,
++                resolved_port,
++                host_port,
++                env,
++                labels=labels,
++            )
+ 
+         wait_for_container_running(client, container_id, STARTUP_TIMEOUT_SECONDS)
+         access_url = f"http://{PUBLIC_HOST}:{host_port}"
+--- third.md
++++ third.md
+@@ -0,0 +1,126 @@
++# Phase 3 可展示并且管理验收报告
++
++## 1. 概述 / 范围 / 结论
++- 验收范围：Dashboard 列表管理、搜索/筛选/分页、详情管理动作（Stop/Restart/Retry/Archive）、日志导出、OpenAPI 对齐、Demo 脚本与 E2E 证据。
++- 结论：PASS（管理 API + 前端控制台闭环完成，可用于演示与基础运维操作）。
++
++## 2. 新增能力清单
++- Dashboard（/）：列表管理、搜索、状态筛选、分页、归档可见控制。
++- 详情页管理动作：Stop / Restart / Retry / Archive（均带二次确认与结果提示）。
++- 日志管理：历史日志查询 + JSONL 下载导出。
++- 容器可识别性：所有容器打 label（`antihub.case_id`、`antihub.managed=true`），动作只操作带 label 的容器。
++
++## 3. 管理 API 契约（OpenAPI 可见）
++
++### 3.1 列表查询
++- `GET /cases?q=&status=&stage=&page=&size=&include_archived=`
++- 返回：`items[] + {total,page,size}`
++- 示例（节选）：`.devlogs/phase3_cases_page1.json`
++```json
++{
++  "items": [
++    {
++      "case_id": "c_95d61d",
++      "status": "RUNNING",
++      "stage": "run",
++      "repo_url": "/home/user2643/code/AntiHub/test-repos/hello-world",
++      "ref": "master",
++      "runtime": {"host_port":30000,"access_url":"http://localhost:30000"},
++      "updated_at": 1769088996.6860673
++    }
++  ],
++  "total": 1,
++  "page": 1,
++  "size": 5
++}
++```
++
++### 3.2 管理动作
++- `POST /cases/{id}/stop`
++- `POST /cases/{id}/restart`
++- `POST /cases/{id}/retry`（可带 `env` 覆盖）
++- `POST /cases/{id}/archive`
++- 示例（Stop）：`.devlogs/phase3_case1_stop.json`
++```json
++{"case_id":"c_95d61d","action":"stop","status":"STOPPED","message":"Stopped"}
++```
++- 示例（Restart）：`.devlogs/phase3_case1_restart.json`
++```json
++{"case_id":"c_95d61d","action":"restart","status":"RUNNING","message":"Restarted"}
++```
++- 示例（Retry）：`.devlogs/phase3_case3_retry.json`
++```json
++{"case_id":"c_a88c95","action":"retry","status":"PENDING","message":"Retry started"}
++```
++- 示例（Archive）：`.devlogs/phase3_case2_archive.json`
++```json
++{"case_id":"c_d2be0f","action":"archive","status":"ARCHIVED","message":"Archived"}
++```
++
++### 3.3 日志查询/导出
++- `GET /cases/{id}/logs?limit=1000&offset=0&format=jsonl`
++- `GET /cases/{id}/logs/download?limit=1000`（浏览器下载）
++- 示例（JSONL 导出）：`.devlogs/phase3_case1_logs.jsonl`
++```json
++{"ts": 1769088996.689066, "stream": "system", "level": "INFO", "line": "Container started: http://localhost:30000"}
++```
++
++## 4. Demo Script（5 分钟）
++1) 打开控制台 `http://127.0.0.1:5173`，进入 Dashboard
++2) 新建案例：填写 `repo_url` + 可选 `ref` + env（只填 key 或打码 value）
++3) 返回列表：看到新 case 出现在顶部，状态变化可见
++4) 进入详情：查看状态/阶段、运行信息、env_keys、实时日志
++5) 点击 Stop：状态变为 STOPPED（提示成功）
++6) 点击 Restart：状态恢复 RUNNING
++7) 点击“下载 1000 行”：导出日志 JSONL
++8) 点击 Archive：列表默认隐藏；切换“显示归档”可再次看到
++
++## 5. E2E 用例证据
++
++### 用例 1：轻量仓 hello-world（RUNNING + Stop/Restart + 日志导出）
++- 创建响应：`.devlogs/phase3_case1_create.json`（`case_id = c_95d61d`）
++- 列表可见：`.devlogs/phase3_cases_page1.json`
++- 运行状态：`.devlogs/phase3_case1_status.json`
++- 访问验证：`curl http://localhost:30000/` -> `HTTP/1.0 200 OK`
++- Stop：`.devlogs/phase3_case1_stop.json`，状态：`.devlogs/phase3_case1_stopped_status.json`
++- Restart：`.devlogs/phase3_case1_restart.json`，状态：`.devlogs/phase3_case1_restart_status.json`
++- 日志导出：`.devlogs/phase3_case1_logs.jsonl`
++- 结论：PASS
++
++### 用例 2：MetaGPT 场景（RUNNING）
++- 创建响应：`.devlogs/phase3_case4_create.json`（`case_id = c_f02478`）
++- 状态响应：`.devlogs/phase3_case4_status.json`（`RUNNING`，`env_keys=["OPENAI_API_KEY"]`）
++- 访问验证：`curl http://localhost:30000/` -> `HTTP/1.0 200 OK`
++- 结论：PASS
++
++### 用例 3：失败场景 + Retry + Archive
++- 失败构建：`.devlogs/phase3_case3_status.json`（`error_code=DOCKER_BUILD_FAILED`）
++- Retry：`.devlogs/phase3_case3_retry.json` 与 `.devlogs/phase3_case3_retry_status.json`（attempt=2，env_keys 保留）
++- Archive：`.devlogs/phase3_case2_archive.json`；列表默认隐藏 `.devlogs/phase3_cases_no_archived.json`；include_archived 显示 `.devlogs/phase3_cases_with_archived.json`
++- 结论：PASS
++
++## 6. 问题清单与修复记录
++1) 管理动作需要可识别容器
++- 修复：新增容器 label（`antihub.case_id` / `antihub.managed=true`），仅对带 label 容器执行 stop/restart
++
++2) Retry 的 env_keys 展示
++- 修复：当 Retry 未提供 env 时，沿用已有 env_keys（不存 env value）
++
++3) 日志导出
++- 修复：新增 JSONL 导出与下载接口，并在前端提供按钮
++
++Patch：`phase3.patch`
++- 应用：`patch -p0 < phase3.patch`
++- 回滚：`patch -p0 -R < phase3.patch`
++
++## 7. 启动说明
++- 后端：`./dev.sh up`
++- 前端：`cd frontend && npm i && npm run dev`
++- 说明：如在 WSL 环境，请使用 WSL 内部 Node/npm（避免 Windows npm 访问 UNC 路径失败）
++
++## 8. Phase 4 建议
++1) 列表性能与索引（Redis 索引/分页优化）
++2) 多项目视角与角色权限
++3) 日志与指标聚合（服务级别状态视图）
++4) 长任务治理（重试策略、队列可视化）
++5) 容器生命周期与资源配额管理
+--- frontend/src/App.tsx
++++ frontend/src/App.tsx
+@@ -22,6 +22,27 @@
+   error_message?: string | null;
+   created_at?: number | null;
+   updated_at?: number | null;
++  repo_url?: string | null;
++  ref?: string | null;
++  branch?: string | null;
++  archived?: boolean;
++  archived_at?: number | null;
++  attempt?: number | null;
++  retry_of?: string | null;
++};
++
++type CaseListResponse = {
++  items: CaseResponse[];
++  total: number;
++  page: number;
++  size: number;
++};
++
++type CaseActionResponse = {
++  case_id: string;
++  action: string;
++  status: string;
++  message: string;
+ };
+ 
+ type LogEntry = {
+@@ -31,7 +52,13 @@
+   line: string;
+ };
+ 
++type Toast = {
++  type: "success" | "error";
++  message: string;
++};
++
+ type Route =
++  | { type: "dashboard" }
+   | { type: "create" }
+   | {
+       type: "case";
+@@ -47,6 +74,7 @@
+   GIT_CLONE_TIMEOUT: "Git 克隆超时，请重试或使用更小的仓库。",
+   STARTUP_TIMEOUT: "容器启动超时，请确认监听 0.0.0.0 且 EXPOSE 端口正确。",
+   CONTAINER_EXIT_NONZERO: "容器非零退出，请查看容器日志。",
++  STOPPED_BY_USER: "已由用户手动停止。",
+   UNEXPECTED_ERROR: "未知错误，请查看日志详情。",
+ };
+ 
+@@ -71,29 +99,12 @@
+   BUILDING: "构建中",
+   STARTING: "启动中",
+   RUNNING: "运行中",
++  STOPPED: "已停止",
+   FAILED: "失败",
+   FINISHED: "已结束",
+   ANALYZING: "分析中",
+ };
+ 
+-function streamLabel(stream: string) {
+-  return STREAM_LABELS[stream] || stream;
+-}
+-
+-function statusLabel(status?: string) {
+-  if (!status) return "-";
+-  const normalized = status.toUpperCase();
+-  const label = STATUS_LABELS[normalized];
+-  return label ? `${label} (${normalized})` : normalized;
+-}
+-
+-function stageLabel(stage?: string) {
+-  if (!stage) return "-";
+-  const normalized = stage.toLowerCase();
+-  const label = STAGE_LABELS[normalized];
+-  return label ? `${label} (${normalized})` : stage;
+-}
+-
+ function joinUrl(base: string, path: string) {
+   const trimmed = base.replace(/\/+$/, "");
+   return `${trimmed}${path}`;
+@@ -110,11 +121,14 @@
+ }
+ 
+ function parseRoute(pathname: string): Route {
++  if (pathname.startsWith("/create")) {
++    return { type: "create" };
++  }
+   const match = pathname.match(/^\/cases\/([^/]+)$/);
+   if (match && match[1]) {
+     return { type: "case", caseId: match[1] };
+   }
+-  return { type: "create" };
++  return { type: "dashboard" };
+ }
+ 
+ function useRoute() {
+@@ -144,6 +158,7 @@
+   const normalized = (status || "").toUpperCase();
+   if (normalized === "RUNNING") return "running";
+   if (normalized === "FAILED") return "failed";
++  if (normalized === "STOPPED") return "neutral";
+   if (normalized === "BUILDING" || normalized === "CLONING" || normalized === "STARTING") {
+     return "working";
+   }
+@@ -151,6 +166,24 @@
+   return "neutral";
+ }
+ 
++function streamLabel(stream: string) {
++  return STREAM_LABELS[stream] || stream;
++}
++
++function statusLabel(status?: string) {
++  if (!status) return "-";
++  const normalized = status.toUpperCase();
++  const label = STATUS_LABELS[normalized];
++  return label ? `${label} (${normalized})` : normalized;
++}
++
++function stageLabel(stage?: string) {
++  if (!stage) return "-";
++  const normalized = stage.toLowerCase();
++  const label = STAGE_LABELS[normalized];
++  return label ? `${label} (${normalized})` : stage;
++}
++
+ function App() {
+   const { route, navigate } = useRoute();
+   const [flashCaseId, setFlashCaseId] = useState<string | null>(null);
+@@ -159,21 +192,27 @@
+     <div className="app">
+       <header className="topbar">
+         <div className="brand">
+-            <div className="brand-mark">AH</div>
++          <div className="brand-mark">AH</div>
+           <div>
+             <div className="brand-title">AntiHub 控制台</div>
+-            <div className="brand-sub">阶段 2 - 创建、观测、对齐</div>
++            <div className="brand-sub">阶段 3 - 可展示与管理</div>
+           </div>
+         </div>
+         <div className="topbar-actions">
+-          <button className="ghost" onClick={() => navigate("/")}>新建案例</button>
++          <button className="ghost" onClick={() => navigate("/")}>控制台</button>
++          <button className="ghost" onClick={() => navigate("/create")}>新建案例</button>
+           <a className="ghost" href="http://127.0.0.1:8010/docs" target="_blank" rel="noreferrer">
+             API 文档
+           </a>
+         </div>
+       </header>
+       <main className="main">
+-        {route.type === "create" ? (
++        {route.type === "dashboard" ? (
++          <Dashboard
++            onOpen={(caseId) => navigate(`/cases/${caseId}`)}
++            onCreate={() => navigate("/create")}
++          />
++        ) : route.type === "create" ? (
+           <CreateCase
+             onCreated={(caseId) => {
+               setFlashCaseId(caseId);
+@@ -373,6 +412,283 @@
+   );
+ }
+ 
++function Dashboard({ onOpen, onCreate }: { onOpen: (caseId: string) => void; onCreate: () => void }) {
++  const [cases, setCases] = useState<CaseResponse[]>([]);
++  const [total, setTotal] = useState(0);
++  const [page, setPage] = useState(1);
++  const [size, setSize] = useState(10);
++  const [query, setQuery] = useState("");
++  const [status, setStatus] = useState("");
++  const [stage, setStage] = useState("");
++  const [includeArchived, setIncludeArchived] = useState(false);
++  const [loading, setLoading] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++  const [toast, setToast] = useState<Toast | null>(null);
++
++  const fetchCases = useCallback(async () => {
++    setLoading(true);
++    setError(null);
++    try {
++      const params = new URLSearchParams();
++      params.set("page", String(page));
++      params.set("size", String(size));
++      if (query.trim()) params.set("q", query.trim());
++      if (status) params.set("status", status);
++      if (stage) params.set("stage", stage);
++      if (includeArchived) params.set("include_archived", "true");
++      const response = await fetch(joinUrl(API_BASE, `/cases?${params.toString()}`));
++      if (!response.ok) {
++        throw new Error(`请求失败 (${response.status})`);
++      }
++      const data = (await response.json()) as CaseListResponse;
++      setCases(data.items || []);
++      setTotal(data.total || 0);
++    } catch (err) {
++      setError(err instanceof Error ? err.message : "加载失败");
++    } finally {
++      setLoading(false);
++    }
++  }, [page, size, query, status, stage, includeArchived]);
++
++  useEffect(() => {
++    fetchCases();
++  }, [fetchCases]);
++
++  useEffect(() => {
++    if (!toast) return undefined;
++    const timer = window.setTimeout(() => setToast(null), 3000);
++    return () => window.clearTimeout(timer);
++  }, [toast]);
++
++  const totalPages = Math.max(1, Math.ceil(total / size));
++  const runningCount = cases.filter((item) => item.status?.toUpperCase() === "RUNNING").length;
++  const failedCount = cases.filter((item) => item.status?.toUpperCase() === "FAILED").length;
++
++  const handleAction = async (caseId: string, action: "stop" | "retry" | "archive") => {
++    const confirmText =
++      action === "stop"
++        ? "确认停止该运行中的案例？"
++        : action === "retry"
++        ? "确认重试该失败案例？"
++        : "确认归档该案例？";
++    if (!window.confirm(confirmText)) return;
++    try {
++      const response = await fetch(joinUrl(API_BASE, `/cases/${caseId}/${action}`), {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: action === "retry" ? JSON.stringify({}) : undefined,
++      });
++      if (!response.ok) {
++        const text = await response.text();
++        throw new Error(text || `操作失败 (${response.status})`);
++      }
++      const data = (await response.json()) as CaseActionResponse;
++      setToast({ type: "success", message: `操作成功：${data.message}` });
++      fetchCases();
++    } catch (err) {
++      setToast({ type: "error", message: err instanceof Error ? err.message : "操作失败" });
++    }
++  };
++
++  return (
++    <div className="dashboard">
++      <div className="dashboard-head">
++        <div>
++          <div className="section-title">案例列表</div>
++          <div className="section-sub">支持搜索、筛选、分页与管理动作。</div>
++        </div>
++        <div className="dashboard-actions">
++          <button className="ghost" type="button" onClick={fetchCases}>
++            刷新列表
++          </button>
++          <button className="primary" type="button" onClick={onCreate}>
++            新建案例
++          </button>
++        </div>
++      </div>
++
++      <div className="stats">
++        <div className="card stat-card">
++          <div className="stat-title">总数</div>
++          <div className="stat-value">{total}</div>
++        </div>
++        <div className="card stat-card">
++          <div className="stat-title">运行中</div>
++          <div className="stat-value">{runningCount}</div>
++        </div>
++        <div className="card stat-card">
++          <div className="stat-title">失败</div>
++          <div className="stat-value">{failedCount}</div>
++        </div>
++      </div>
++
++      <div className="filters-panel card">
++        <label className="field">
++          <span>搜索</span>
++          <input
++            type="text"
++            placeholder="case_id / repo / ref"
++            value={query}
++            onChange={(event) => {
++              setQuery(event.target.value);
++              setPage(1);
++            }}
++          />
++        </label>
++        <label className="field">
++          <span>状态</span>
++          <select
++            value={status}
++            onChange={(event) => {
++              setStatus(event.target.value);
++              setPage(1);
++            }}
++          >
++            <option value="">全部</option>
++            <option value="RUNNING">RUNNING</option>
++            <option value="FAILED">FAILED</option>
++            <option value="STOPPED">STOPPED</option>
++            <option value="PENDING">PENDING</option>
++            <option value="BUILDING">BUILDING</option>
++          </select>
++        </label>
++        <label className="field">
++          <span>阶段</span>
++          <select
++            value={stage}
++            onChange={(event) => {
++              setStage(event.target.value);
++              setPage(1);
++            }}
++          >
++            <option value="">全部</option>
++            <option value="clone">clone</option>
++            <option value="build">build</option>
++            <option value="run">run</option>
++            <option value="analyze">analyze</option>
++            <option value="system">system</option>
++          </select>
++        </label>
++        <label className="field checkbox">
++          <span>显示归档</span>
++          <input
++            type="checkbox"
++            checked={includeArchived}
++            onChange={(event) => {
++              setIncludeArchived(event.target.checked);
++              setPage(1);
++            }}
++          />
++        </label>
++        <label className="field">
++          <span>每页</span>
++          <select
++            value={String(size)}
++            onChange={(event) => {
++              setSize(Number(event.target.value));
++              setPage(1);
++            }}
++          >
++            <option value="10">10</option>
++            <option value="20">20</option>
++            <option value="50">50</option>
++          </select>
++        </label>
++      </div>
++
++      {toast ? (
++        <div className={toast.type === "success" ? "success-banner" : "error-banner"}>{toast.message}</div>
++      ) : null}
++      {error ? <div className="error-banner">{error}</div> : null}
++
++      <div className="card table-card">
++        <div className="table">
++          <div className="table-header">
++            <span>case_id</span>
++            <span>repo/ref</span>
++            <span>状态/阶段</span>
++            <span>更新时间</span>
++            <span>访问</span>
++            <span>错误码</span>
++            <span>操作</span>
++          </div>
++          {loading ? (
++            <div className="table-empty">加载中...</div>
++          ) : cases.length ? (
++            cases.map((item) => {
++              const runtime = item.runtime || {};
++              const statusUpper = (item.status || "").toUpperCase();
++              return (
++                <div className="table-row" key={item.case_id}>
++                  <span className="mono">{item.case_id}</span>
++                  <span className="table-repo">
++                    <div className="mono">{item.repo_url || "-"}</div>
++                    <div className="muted">{item.ref || item.branch || "-"}</div>
++                  </span>
++                  <span>
++                    <span className={`badge badge--${statusTone(item.status)}`}>{statusLabel(item.status)}</span>
++                    <span className="stage">{stageLabel(item.stage)}</span>
++                  </span>
++                  <span>{formatTime(item.updated_at)}</span>
++                  <span>
++                    {runtime.access_url ? (
++                      <a href={runtime.access_url} target="_blank" rel="noreferrer">
++                        {runtime.access_url}
++                      </a>
++                    ) : runtime.host_port ? (
++                      <span>{runtime.host_port}</span>
++                    ) : (
++                      "-"
++                    )}
++                  </span>
++                  <span className="mono">{statusUpper === "FAILED" ? item.error_code || "-" : "-"}</span>
++                  <span className="table-actions">
++                    <button className="ghost" onClick={() => onOpen(item.case_id)}>详情</button>
++                    <button
++                      className="ghost"
++                      disabled={statusUpper !== "RUNNING"}
++                      onClick={() => handleAction(item.case_id, "stop")}
++                    >
++                      停止
++                    </button>
++                    <button
++                      className="ghost"
++                      disabled={statusUpper !== "FAILED"}
++                      onClick={() => handleAction(item.case_id, "retry")}
++                    >
++                      重试
++                    </button>
++                    <button className="ghost" onClick={() => handleAction(item.case_id, "archive")}>
++                      归档
++                    </button>
++                  </span>
++                </div>
++              );
++            })
++          ) : (
++            <div className="table-empty">暂无案例</div>
++          )}
++        </div>
++        <div className="pagination">
++          <button className="ghost" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
++            上一页
++          </button>
++          <span>
++            第 {page} / {totalPages} 页
++          </span>
++          <button
++            className="ghost"
++            disabled={page >= totalPages}
++            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
++          >
++            下一页
++          </button>
++        </div>
++      </div>
++    </div>
++  );
++}
++
+ function CaseDetail({
+   caseId,
+   onBack,
+@@ -387,6 +703,7 @@
+   const [caseData, setCaseData] = useState<CaseResponse | null>(null);
+   const [loadError, setLoadError] = useState<string | null>(null);
+   const [loading, setLoading] = useState(false);
++  const [toast, setToast] = useState<Toast | null>(null);
+   const statusRef = useRef<string>("");
+   const fetchLock = useRef(false);
+ 
+@@ -443,7 +760,7 @@
+       if (cancelled) return;
+       await fetchCase(true);
+       const status = statusRef.current.toUpperCase();
+-      const slow = status === "RUNNING" || status === "FAILED" || status === "FINISHED";
++      const slow = status === "RUNNING" || status === "FAILED" || status === "STOPPED" || status === "FINISHED";
+       const delay = slow ? 5000 : 2000;
+       timer = window.setTimeout(poll, delay);
+     };
+@@ -462,10 +779,63 @@
+     return undefined;
+   }, [flashCaseId, clearFlash]);
+ 
++  useEffect(() => {
++    if (!toast) return undefined;
++    const timer = window.setTimeout(() => setToast(null), 3000);
++    return () => window.clearTimeout(timer);
++  }, [toast]);
++
+   const runtime = caseData?.runtime || {};
+   const envKeys = caseData?.env_keys || [];
+   const errorCode = caseData?.error_code || undefined;
+   const errorMessage = caseData?.error_message || undefined;
++  const statusUpper = (caseData?.status || "").toUpperCase();
++
++  const runAction = async (action: "stop" | "restart" | "retry" | "archive") => {
++    const confirmText =
++      action === "stop"
++        ? "确认停止该运行中的案例？"
++        : action === "restart"
++        ? "确认重新启动该案例？"
++        : action === "retry"
++        ? "确认重新构建并运行该案例？"
++        : "确认归档该案例？";
++    if (!window.confirm(confirmText)) return;
++    try {
++      const response = await fetch(joinUrl(API_BASE, `/cases/${caseId}/${action}`), {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: action === "retry" ? JSON.stringify({}) : undefined,
++      });
++      if (!response.ok) {
++        const text = await response.text();
++        throw new Error(text || `操作失败 (${response.status})`);
++      }
++      const data = (await response.json()) as CaseActionResponse;
++      setToast({ type: "success", message: `操作成功：${data.message}` });
++      fetchCase();
++    } catch (err) {
++      setToast({ type: "error", message: err instanceof Error ? err.message : "操作失败" });
++    }
++  };
++
++  const copyLogs = async () => {
++    try {
++      const response = await fetch(joinUrl(API_BASE, `/cases/${caseId}/logs?limit=1000&format=jsonl`));
++      if (!response.ok) {
++        throw new Error(`导出失败 (${response.status})`);
++      }
++      const text = await response.text();
++      await navigator.clipboard.writeText(text);
++      setToast({ type: "success", message: "已复制最近 1000 行日志" });
++    } catch (err) {
++      setToast({ type: "error", message: err instanceof Error ? err.message : "导出失败" });
++    }
++  };
++
++  const downloadLogs = () => {
++    window.open(joinUrl(API_BASE, `/cases/${caseId}/logs/download?limit=1000`), "_blank");
++  };
+ 
+   return (
+     <div className="detail">
+@@ -479,6 +849,9 @@
+         </button>
+       </div>
+       {flashCaseId ? <div className="success-banner">创建成功：{flashCaseId}</div> : null}
++      {toast ? (
++        <div className={toast.type === "success" ? "success-banner" : "error-banner"}>{toast.message}</div>
++      ) : null}
+       {loadError ? <div className="error-banner">{loadError}</div> : null}
+       <div className="detail-grid">
+         <section className="card" style={{ animationDelay: "0.05s" }}>
+@@ -522,6 +895,27 @@
+           </div>
+         </section>
+         <section className="card" style={{ animationDelay: "0.18s" }}>
++          <div className="section-title">管理动作</div>
++          <div className="action-grid">
++            <button className="ghost" disabled={statusUpper !== "RUNNING"} onClick={() => runAction("stop")}>
++              停止
++            </button>
++            <button
++              className="ghost"
++              disabled={!(statusUpper === "STOPPED" || statusUpper === "FAILED")}
++              onClick={() => runAction("restart")}
++            >
++              重启
++            </button>
++            <button className="ghost" disabled={statusUpper !== "FAILED"} onClick={() => runAction("retry")}>
++              重试
++            </button>
++            <button className="ghost" onClick={() => runAction("archive")}>
++              归档
++            </button>
++          </div>
++        </section>
++        <section className="card" style={{ animationDelay: "0.2s" }}>
+           <div className="section-title">环境变量键</div>
+           {envKeys.length ? (
+             <div className="chips">
+@@ -546,7 +940,7 @@
+           </section>
+         ) : null}
+         <section className="card logs" style={{ animationDelay: "0.3s" }}>
+-          <LogPanel caseId={caseId} />
++          <LogPanel caseId={caseId} onCopyLogs={copyLogs} onDownloadLogs={downloadLogs} />
+         </section>
+       </div>
+     </div>
+@@ -573,7 +967,15 @@
+   );
+ }
+ 
+-function LogPanel({ caseId }: { caseId: string }) {
++function LogPanel({
++  caseId,
++  onCopyLogs,
++  onDownloadLogs,
++}: {
++  caseId: string;
++  onCopyLogs: () => void;
++  onDownloadLogs: () => void;
++}) {
+   const [logs, setLogs] = useState<LogEntry[]>([]);
+   const [autoScroll, setAutoScroll] = useState(true);
+   const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">(
+@@ -668,6 +1070,12 @@
+           </div>
+         </div>
+         <div className="logs-actions">
++          <button className="ghost" type="button" onClick={onCopyLogs}>
++            复制 JSONL
++          </button>
++          <button className="ghost" type="button" onClick={onDownloadLogs}>
++            下载 1000 行
++          </button>
+           <button className="ghost" type="button" onClick={() => setAutoScroll((value) => !value)}>
+             {autoScroll ? "暂停滚动" : "自动滚动"}
+           </button>
+--- frontend/src/styles.css
++++ frontend/src/styles.css
+@@ -300,6 +300,128 @@
+   font-size: 14px;
+ }
+ 
++.dashboard {
++  display: flex;
++  flex-direction: column;
++  gap: 20px;
++}
++
++.dashboard-head {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  gap: 16px;
++}
++
++.dashboard-actions {
++  display: flex;
++  gap: 12px;
++}
++
++.stats {
++  display: grid;
++  grid-template-columns: repeat(3, 1fr);
++  gap: 16px;
++}
++
++.stat-card {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++}
++
++.stat-title {
++  color: var(--muted);
++  font-size: 13px;
++}
++
++.stat-value {
++  font-size: 24px;
++  font-weight: 700;
++}
++
++.filters-panel {
++  display: grid;
++  grid-template-columns: repeat(5, minmax(0, 1fr));
++  gap: 12px;
++  align-items: end;
++}
++
++.filters-panel select,
++.filters-panel input {
++  padding: 10px 12px;
++  border-radius: 12px;
++  border: 1px solid var(--border);
++}
++
++.table-card {
++  padding: 0;
++  overflow: hidden;
++}
++
++.table {
++  display: grid;
++}
++
++.table-header,
++.table-row {
++  display: grid;
++  grid-template-columns: 1.2fr 2fr 1.6fr 1.2fr 1.6fr 1fr 1.6fr;
++  gap: 12px;
++  padding: 16px 20px;
++  align-items: center;
++}
++
++.table-header {
++  font-size: 13px;
++  font-weight: 600;
++  color: var(--muted);
++  text-transform: uppercase;
++  letter-spacing: 0.5px;
++  background: rgba(30, 111, 122, 0.06);
++}
++
++.table-row {
++  border-top: 1px solid var(--border);
++  font-size: 14px;
++}
++
++.table-row a {
++  color: var(--accent-strong);
++  text-decoration: none;
++}
++
++.table-repo {
++  display: flex;
++  flex-direction: column;
++  gap: 4px;
++}
++
++.table-actions {
++  display: flex;
++  gap: 8px;
++  flex-wrap: wrap;
++}
++
++.table-empty {
++  padding: 24px;
++  color: var(--muted);
++}
++
++.pagination {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  padding: 16px 20px;
++  border-top: 1px solid var(--border);
++}
++
++.action-grid {
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 10px;
++}
++
+ .detail {
+   display: flex;
+   flex-direction: column;
+@@ -574,6 +696,14 @@
+     grid-template-columns: 1fr;
+   }
+ 
++  .stats {
++    grid-template-columns: 1fr;
++  }
++
++  .filters-panel {
++    grid-template-columns: 1fr;
++  }
++
+   .detail-grid {
+     grid-template-columns: 1fr;
+   }
+@@ -597,4 +727,15 @@
+   .log-line {
+     grid-template-columns: 1fr;
+   }
++
++  .table-header,
++  .table-row {
++    grid-template-columns: 1fr;
++    gap: 6px;
++  }
++
++  .pagination {
++    flex-direction: column;
++    gap: 12px;
++  }
+ }

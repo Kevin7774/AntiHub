@@ -1,0 +1,36 @@
+groups:
+  - name: antihub-commercial
+    rules:
+      - alert: AntiHubHigh5xxRate
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{job="antihub-api",status=~"5.."}[5m])) /
+            clamp_min(sum(rate(http_server_requests_seconds_count{job="antihub-api"}[5m])), 0.001)
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+          service: antihub-api
+        annotations:
+          summary: "AntiHub API 5xx ratio is above 1%"
+          description: "Check /health and /metrics/runtime, then inspect structured logs by trace_id."
+
+      - alert: AntiHubP99LatencyHigh
+        expr: histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{job="antihub-api"}[5m])) by (le)) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: antihub-api
+        annotations:
+          summary: "AntiHub API P99 latency is above 800ms"
+          description: "Investigate rate limit, database pool saturation and upstream LLM latency."
+
+      - alert: AntiHubBillingHealthDegraded
+        expr: antihub_health_billing_status{job="antihub-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: antihub-billing
+        annotations:
+          summary: "Billing health endpoint indicates degraded/error"
+          description: "Verify DB connectivity, webhook secret, payment provider credentials and Redis."
