@@ -167,6 +167,8 @@ def get_network_settings() -> Dict[str, bool]:
 REDIS_URL = _get("REDIS_URL", "redis://localhost:6379/0")
 REDIS_DISABLED = str(_get("REDIS_DISABLED", "false")).lower() in {"1", "true", "yes"}
 CELERY_ALWAYS_EAGER = str(_get("CELERY_ALWAYS_EAGER", "false")).lower() in {"1", "true", "yes"}
+FEATURE_SAAS_ENTITLEMENTS = str(_get("FEATURE_SAAS_ENTITLEMENTS", "false")).lower() in {"1", "true", "yes"}
+FEATURE_SAAS_ADMIN_API = str(_get("FEATURE_SAAS_ADMIN_API", "false")).lower() in {"1", "true", "yes"}
 API_HOST = _get("API_HOST", "127.0.0.1")
 API_PORT = int(_get("API_PORT", "8010"))
 _root_path = str(_get("ROOT_PATH", "")).strip()
@@ -189,6 +191,11 @@ AUTH_ENABLED = str(_get("AUTH_ENABLED", "true")).lower() in {"1", "true", "yes"}
 AUTH_USERS_JSON = str(_get("AUTH_USERS_JSON", "")).strip()
 AUTH_TOKEN_SECRET = str(_get("AUTH_TOKEN_SECRET", "")).strip()
 AUTH_TOKEN_TTL_SECONDS = int(_get("AUTH_TOKEN_TTL_SECONDS", "43200"))
+DISABLE_RECOMMEND_RATE_LIMIT = str(_get("DISABLE_RECOMMEND_RATE_LIMIT", "false")).lower() in {
+    "1",
+    "true",
+    "yes",
+}
 ROOT_ADMIN_USERNAME = str(_get("ROOT_ADMIN_USERNAME", "root")).strip()
 ROOT_ADMIN_PASSWORD = str(_get("ROOT_ADMIN_PASSWORD", "")).strip()
 ROOT_ADMIN_PASSWORD_HASH = str(_get("ROOT_ADMIN_PASSWORD_HASH", "")).strip()

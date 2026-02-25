@@ -213,6 +213,18 @@ ERROR_CODE_MAP: Dict[str, Dict[str, str]] = {
         "message": "说明书解析失败",
         "hint": "检查仓库文件编码与权限。",
     },
+    "FEATURE_DISABLED": {
+        "message": "功能未开启",
+        "hint": "请联系管理员开启对应 Feature Flag。",
+    },
+    "NOT_ADMIN": {
+        "message": "管理员权限不足",
+        "hint": "仅管理员可访问该接口。",
+    },
+    "ENTITLEMENT_REQUIRED": {
+        "message": "权益不足",
+        "hint": "当前套餐未包含该功能，请升级套餐后重试。",
+    },
     "UNEXPECTED_ERROR": {
         "message": "未知错误",
         "hint": "查看日志详情或联系管理员。",

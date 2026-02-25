@@ -64,10 +64,14 @@ from billing import (
     BillingRepository,
     BillingStateError,
     PaymentWebhookError,
+    get_user_entitlements,
     get_payment_provider,
     init_billing_db,
+    invalidate_plan_entitlements,
+    invalidate_user_entitlements,
     process_payment_webhook,
     resolve_user_rpm,
+    require_entitlement,
     session_scope,
     verify_webhook_signature,
 )
@@ -90,6 +94,9 @@ from config import (
     CASE_LABEL_MANAGED,
     CORS_ORIGINS,
     DEEP_SEARCH_POINTS_COST,
+    DISABLE_RECOMMEND_RATE_LIMIT,
+    FEATURE_SAAS_ADMIN_API,
+    FEATURE_SAAS_ENTITLEMENTS,
     GIT_SHA,
     ONE_CLICK_DEPLOY_POINTS_COST,
     OPENCLAW_BASE_URL,
@@ -171,6 +178,7 @@ IDEMPOTENCY_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_\-:.]{0,127}$"
 EXTERNAL_ORDER_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_\-:.]{0,127}$"
 CURRENCY_PATTERN = r"^[A-Za-z]{3}$"
 TENANT_CODE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$"
+ENTITLEMENT_KEY_PATTERN = r"^[a-z][a-z0-9_:.\\-]{1,127}$"
 MALICIOUS_XSS_PATTERN = re.compile(r"(?is)<\s*/?\s*script\b|javascript:|on\w+\s*=")
 MALICIOUS_SQLI_PATTERN = re.compile(
     r"(?is)\bunion\b\s+\bselect\b|\bdrop\b\s+\btable\b|\bdelete\b\s+\bfrom\b|\binsert\b\s+\binto\b|\bor\b\s+1\s*=\s*1\b|\band\b\s+1\s*=\s*1\b"
@@ -670,6 +678,8 @@ async def auth_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def recommendation_rate_limit_middleware(request: Request, call_next):
+    if DISABLE_RECOMMEND_RATE_LIMIT:
+        return await call_next(request)
     if not _should_rate_limit_recommendation(request):
         return await call_next(request)
 
@@ -773,6 +783,11 @@ def require_root(identity: AuthIdentity = Depends(get_current_identity)) -> Auth
     if not _is_root_role(identity):
         raise HTTPException(status_code=403, detail="root role required")
     return identity
+
+
+def _ensure_feature_enabled(enabled: bool) -> None:
+    if not enabled:
+        raise HTTPException(status_code=404, detail="feature disabled")
 
 
 def _identity_tenant_id(repo: BillingRepository, identity: AuthIdentity) -> str | None:
@@ -1306,6 +1321,12 @@ class BillingPlanResponse(BaseModel):
     active: bool
 
 
+class SaaSPlanResponse(BillingPlanResponse):
+    billing_cycle: Optional[str] = None
+    trial_days: Optional[int] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class BillingPlanCreateRequest(BaseModel):
     code: str = Field(..., min_length=1, max_length=64, pattern=PLAN_CODE_PATTERN)
     name: str = Field(..., min_length=1, max_length=120)
@@ -1313,6 +1334,9 @@ class BillingPlanCreateRequest(BaseModel):
     currency: str = Field(default="usd", min_length=3, max_length=3, pattern=CURRENCY_PATTERN)
     price_cents: int = Field(0, ge=0, le=100_000_000_00)
     monthly_points: int = Field(0, ge=0, le=100_000_000)
+    billing_cycle: str = Field(default="monthly", min_length=1, max_length=16)
+    trial_days: int = Field(default=0, ge=0, le=3650)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     active: bool = True
 
     @field_validator("code", mode="before")
@@ -1338,6 +1362,20 @@ class BillingPlanCreateRequest(BaseModel):
         normalized = _require_safe_input("description", str(value))
         return normalized or None
 
+    @field_validator("billing_cycle", mode="before")
+    @classmethod
+    def _normalize_billing_cycle(cls, value: Any) -> str:
+        return str(value or "monthly").strip().lower() or "monthly"
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _normalize_metadata(cls, value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("metadata must be an object")
+        return dict(value)
+
 
 class BillingPlanUpdateRequest(BaseModel):
     code: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=PLAN_CODE_PATTERN)
@@ -1346,6 +1384,9 @@ class BillingPlanUpdateRequest(BaseModel):
     currency: Optional[str] = Field(default=None, min_length=3, max_length=3, pattern=CURRENCY_PATTERN)
     price_cents: Optional[int] = Field(default=None, ge=0, le=100_000_000_00)
     monthly_points: Optional[int] = Field(default=None, ge=0, le=100_000_000)
+    billing_cycle: Optional[str] = Field(default=None, min_length=1, max_length=16)
+    trial_days: Optional[int] = Field(default=None, ge=0, le=3650)
+    metadata: Optional[Dict[str, Any]] = None
     active: Optional[bool] = None
 
     @field_validator("code", mode="before")
@@ -1376,6 +1417,103 @@ class BillingPlanUpdateRequest(BaseModel):
             return None
         normalized = _require_safe_input("description", str(value))
         return normalized or None
+
+    @field_validator("billing_cycle", mode="before")
+    @classmethod
+    def _normalize_billing_cycle(cls, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        return str(value or "").strip().lower() or None
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _normalize_metadata(cls, value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("metadata must be an object")
+        return dict(value)
+
+
+class BillingPlanEntitlementResponse(BaseModel):
+    entitlement_id: str
+    plan_id: str
+    key: str
+    enabled: bool
+    value: Any = None
+    limit: Optional[int] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class BillingPlanEntitlementCreateRequest(BaseModel):
+    key: str = Field(..., min_length=2, max_length=128, pattern=ENTITLEMENT_KEY_PATTERN)
+    enabled: bool = True
+    value: Any = None
+    limit: Optional[int] = Field(default=None, ge=0, le=1_000_000_000)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("key", mode="before")
+    @classmethod
+    def _normalize_key(cls, value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _normalize_metadata(cls, value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("metadata must be an object")
+        return dict(value)
+
+
+class BillingPlanEntitlementUpdateRequest(BaseModel):
+    key: Optional[str] = Field(default=None, min_length=2, max_length=128, pattern=ENTITLEMENT_KEY_PATTERN)
+    enabled: Optional[bool] = None
+    value: Any = None
+    limit: Optional[int] = Field(default=None, ge=0, le=1_000_000_000)
+    metadata: Optional[Dict[str, Any]] = None
+
+    @field_validator("key", mode="before")
+    @classmethod
+    def _normalize_key(cls, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        return str(value or "").strip().lower() or None
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _normalize_metadata(cls, value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("metadata must be an object")
+        return dict(value)
+
+
+class BillingEntitlementsMeResponse(BaseModel):
+    user_id: str
+    entitlements: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+
+class BillingBindUserPlanRequest(BaseModel):
+    plan_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    plan_code: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=PLAN_CODE_PATTERN)
+    duration_days: Optional[int] = Field(default=None, ge=1, le=36500)
+    auto_renew: bool = False
+
+    @field_validator("plan_id", "plan_code", mode="before")
+    @classmethod
+    def _normalize_plan_key(cls, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        return str(value or "").strip() or None
+
+    @model_validator(mode="after")
+    def _validate_plan_selector(self) -> "BillingBindUserPlanRequest":
+        if not self.plan_id and not self.plan_code:
+            raise ValueError("plan_id or plan_code is required")
+        return self
 
 
 class BillingCheckoutRequest(BaseModel):
@@ -2173,6 +2311,29 @@ def _to_plan_response(plan: Any) -> BillingPlanResponse:
     )
 
 
+def _to_saas_plan_response(plan: Any) -> SaaSPlanResponse:
+    metadata_value = getattr(plan, "metadata_json", None)
+    if not isinstance(metadata_value, dict):
+        metadata_value = {}
+    return SaaSPlanResponse(
+        plan_id=str(plan.id),
+        code=str(plan.code),
+        name=str(plan.name),
+        description=plan.description,
+        currency=str(plan.currency),
+        price_cents=int(plan.price_cents),
+        monthly_points=int(plan.monthly_points),
+        active=bool(plan.active),
+        billing_cycle=(str(getattr(plan, "billing_cycle", "") or "").strip().lower() or "monthly"),
+        trial_days=(
+            int(getattr(plan, "trial_days", 0))
+            if getattr(plan, "trial_days", None) is not None
+            else 0
+        ),
+        metadata=dict(metadata_value),
+    )
+
+
 def _to_workspace_plan_brief(plan: Any) -> TenantWorkspacePlanBrief:
     return TenantWorkspacePlanBrief(
         code=str(plan.code),
@@ -2182,6 +2343,31 @@ def _to_workspace_plan_brief(plan: Any) -> TenantWorkspacePlanBrief:
         monthly_points=int(plan.monthly_points),
         active=bool(plan.active),
     )
+
+
+def _to_plan_entitlement_response(item: Any) -> BillingPlanEntitlementResponse:
+    metadata_value = getattr(item, "metadata_json", None)
+    if not isinstance(metadata_value, dict):
+        metadata_value = {}
+    limit_raw = getattr(item, "limit_value", None)
+    return BillingPlanEntitlementResponse(
+        entitlement_id=str(getattr(item, "id", "")),
+        plan_id=str(getattr(item, "plan_id", "")),
+        key=str(getattr(item, "key", "")),
+        enabled=bool(getattr(item, "enabled", False)),
+        value=getattr(item, "value_json", None),
+        limit=(int(limit_raw) if limit_raw is not None else None),
+        metadata=dict(metadata_value),
+    )
+
+
+def _duration_days_from_plan(plan: Any) -> int:
+    cycle = str(getattr(plan, "billing_cycle", "") or "").strip().lower()
+    if cycle == "yearly":
+        return 365
+    if cycle == "monthly":
+        return 30
+    return 30
 
 
 def _to_tenant_response(tenant: Any) -> TenantInfo:
@@ -2877,6 +3063,19 @@ async def billing_plans(identity: AuthIdentity = Depends(get_current_identity)) 
         return [_to_plan_response(plan) for plan in plans]
 
 
+@app.get("/billing/entitlements/me", response_model=BillingEntitlementsMeResponse)
+async def billing_entitlements_me(identity: AuthIdentity = Depends(get_current_identity)) -> BillingEntitlementsMeResponse:
+    _ensure_feature_enabled(FEATURE_SAAS_ENTITLEMENTS)
+    entitlements = get_user_entitlements(identity.username)
+    return BillingEntitlementsMeResponse(user_id=identity.username, entitlements=entitlements)
+
+
+@app.get("/billing/entitlements/check/deep-search", response_model=Dict[str, Any])
+async def billing_entitlement_check_deep_search(_: Dict[str, Any] = Depends(require_entitlement("feature.deep_search"))) -> Dict[str, Any]:
+    _ensure_feature_enabled(FEATURE_SAAS_ENTITLEMENTS)
+    return {"allowed": True}
+
+
 @app.post("/billing/checkout", response_model=BillingCheckoutResponse)
 async def billing_checkout(
     payload: BillingCheckoutRequest,
@@ -3036,6 +3235,7 @@ async def billing_dev_simulate_payment(
 
     event_id = str(payload.event_id or f"dev_sim_{uuid.uuid4().hex[:20]}").strip()
     now = datetime.now(timezone.utc)
+    user_id_for_cache_invalidate = ""
 
     with session_scope() as session:
         repo = BillingRepository(session)
@@ -3044,6 +3244,7 @@ async def billing_dev_simulate_payment(
             raise HTTPException(status_code=404, detail=f"order not found: {external_order_id}")
         if (not _is_admin_role(identity)) and str(order.user_id) != str(identity.username):
             raise HTTPException(status_code=403, detail="not allowed")
+        user_id_for_cache_invalidate = str(getattr(order, "user_id", "") or "")
 
         event = {
             "event_type": "payment.succeeded",
@@ -3085,6 +3286,9 @@ async def billing_dev_simulate_payment(
                 occurred_at=now,
             )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if user_id_for_cache_invalidate:
+        invalidate_user_entitlements(user_id_for_cache_invalidate)
 
     return PaymentWebhookResponse(**result)
 
@@ -3130,6 +3334,208 @@ async def update_billing_plan(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return _to_plan_response(plan)
+
+
+@app.get("/admin/saas/plans", response_model=List[SaaSPlanResponse])
+async def saas_list_plans(_: AuthIdentity = Depends(require_admin)) -> List[SaaSPlanResponse]:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        plans = repo.list_plans(include_inactive=True)
+        return [_to_saas_plan_response(item) for item in plans]
+
+
+@app.post("/admin/saas/plans", response_model=SaaSPlanResponse)
+async def saas_create_plan(
+    payload: BillingPlanCreateRequest,
+    _: AuthIdentity = Depends(require_admin),
+) -> SaaSPlanResponse:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        plan = repo.create_plan(
+            code=payload.code.strip(),
+            name=payload.name.strip(),
+            price_cents=payload.price_cents,
+            monthly_points=payload.monthly_points,
+            currency=payload.currency.strip().lower(),
+            description=(payload.description or "").strip() or None,
+            active=payload.active,
+            billing_cycle=(payload.billing_cycle or "monthly").strip().lower(),
+            trial_days=int(payload.trial_days),
+            metadata_json=dict(payload.metadata or {}),
+        )
+        return _to_saas_plan_response(plan)
+
+
+@app.put("/admin/saas/plans/{plan_id}", response_model=SaaSPlanResponse)
+async def saas_update_plan(
+    plan_id: str,
+    payload: BillingPlanUpdateRequest,
+    _: AuthIdentity = Depends(require_admin),
+) -> SaaSPlanResponse:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        try:
+            plan = repo.update_plan(
+                plan_id,
+                code=payload.code,
+                name=payload.name,
+                description=payload.description,
+                currency=payload.currency,
+                price_cents=payload.price_cents,
+                monthly_points=payload.monthly_points,
+                active=payload.active,
+                billing_cycle=payload.billing_cycle,
+                trial_days=payload.trial_days,
+                metadata_json=payload.metadata,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _to_saas_plan_response(plan)
+
+
+@app.delete("/admin/saas/plans/{plan_id}", response_model=SaaSPlanResponse)
+async def saas_deactivate_plan(plan_id: str, _: AuthIdentity = Depends(require_admin)) -> SaaSPlanResponse:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        try:
+            plan = repo.deactivate_plan(plan_id)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    invalidate_plan_entitlements(plan_id)
+    return _to_saas_plan_response(plan)
+
+
+@app.get("/admin/saas/plans/{plan_id}/entitlements", response_model=List[BillingPlanEntitlementResponse])
+async def saas_list_plan_entitlements(
+    plan_id: str,
+    include_disabled: bool = Query(True),
+    _: AuthIdentity = Depends(require_admin),
+) -> List[BillingPlanEntitlementResponse]:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        plan = repo.get_plan_by_id(plan_id)
+        if plan is None:
+            raise HTTPException(status_code=404, detail="plan not found")
+        items = repo.list_plan_entitlements(plan_id=plan_id, include_disabled=bool(include_disabled))
+        return [_to_plan_entitlement_response(item) for item in items]
+
+
+@app.post("/admin/saas/plans/{plan_id}/entitlements", response_model=BillingPlanEntitlementResponse)
+async def saas_create_plan_entitlement(
+    plan_id: str,
+    payload: BillingPlanEntitlementCreateRequest,
+    _: AuthIdentity = Depends(require_admin),
+) -> BillingPlanEntitlementResponse:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        try:
+            item = repo.create_plan_entitlement(
+                plan_id=plan_id,
+                key=payload.key,
+                enabled=payload.enabled,
+                value_json=payload.value,
+                limit_value=payload.limit,
+                metadata_json=payload.metadata,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    invalidate_plan_entitlements(plan_id)
+    return _to_plan_entitlement_response(item)
+
+
+@app.put("/admin/saas/entitlements/{entitlement_id}", response_model=BillingPlanEntitlementResponse)
+async def saas_update_plan_entitlement(
+    entitlement_id: str,
+    payload: BillingPlanEntitlementUpdateRequest,
+    _: AuthIdentity = Depends(require_admin),
+) -> BillingPlanEntitlementResponse:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        patch = payload.model_dump(exclude_unset=True)
+        kwargs: Dict[str, Any] = {}
+        if "key" in patch:
+            kwargs["key"] = patch.get("key")
+        if "enabled" in patch:
+            kwargs["enabled"] = patch.get("enabled")
+        if "value" in payload.model_fields_set:
+            kwargs["value_json"] = payload.value
+        if "limit" in payload.model_fields_set:
+            kwargs["limit_value"] = payload.limit
+        if "metadata" in payload.model_fields_set:
+            kwargs["metadata_json"] = payload.metadata
+        try:
+            item = repo.update_plan_entitlement(entitlement_id, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    invalidate_plan_entitlements(str(getattr(item, "plan_id", "")))
+    return _to_plan_entitlement_response(item)
+
+
+@app.delete("/admin/saas/entitlements/{entitlement_id}", response_model=Dict[str, Any])
+async def saas_delete_plan_entitlement(
+    entitlement_id: str,
+    _: AuthIdentity = Depends(require_admin),
+) -> Dict[str, Any]:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        item = repo.get_plan_entitlement(entitlement_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="plan entitlement not found")
+        plan_id = str(getattr(item, "plan_id", "") or "")
+        deleted = repo.delete_plan_entitlement(entitlement_id)
+    invalidate_plan_entitlements(plan_id)
+    return {"deleted": bool(deleted), "entitlement_id": entitlement_id}
+
+
+@app.post("/admin/saas/users/{username}/plan", response_model=BillingSubscriptionSnapshot)
+async def saas_bind_user_plan(
+    username: str,
+    payload: BillingBindUserPlanRequest,
+    _: AuthIdentity = Depends(require_admin),
+) -> BillingSubscriptionSnapshot:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        plan = None
+        if payload.plan_id:
+            plan = repo.get_plan_by_id(payload.plan_id)
+        elif payload.plan_code:
+            plan = repo.get_plan_by_code(payload.plan_code)
+        if plan is None:
+            raise HTTPException(status_code=404, detail="plan not found")
+
+        duration_days = payload.duration_days if payload.duration_days is not None else _duration_days_from_plan(plan)
+        try:
+            sub = repo.bind_user_plan(
+                user_id=str(username or "").strip(),
+                plan_id=str(getattr(plan, "id", "")),
+                duration_days=max(1, int(duration_days)),
+                auto_renew=bool(payload.auto_renew),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        plan_code = str(getattr(plan, "code", "") or "") or None
+        plan_name = str(getattr(plan, "name", "") or "") or None
+    invalidate_user_entitlements(str(username or "").strip())
+    return BillingSubscriptionSnapshot(
+        subscription_id=str(getattr(sub, "id", "")),
+        status=str(getattr(getattr(sub, "status", None), "value", getattr(sub, "status", "active"))),
+        plan_code=plan_code,
+        plan_name=plan_name,
+        expires_at=(
+            getattr(sub, "expires_at").isoformat()
+            if getattr(sub, "expires_at", None) is not None
+            else None
+        ),
+    )
 
 
 @app.get("/admin/billing/users/status", response_model=List[AdminUserBillingStatusResponse])
@@ -3469,11 +3875,16 @@ async def payment_webhook(request: Request) -> PaymentWebhookResponse:
     event_id = str(event_dict.get("event_id") or event_dict.get("id") or event_dict.get("idempotency_key") or "").strip() or None
     data = event_dict.get("data") if isinstance(event_dict.get("data"), dict) else event_dict
     external_order_id = str(data.get("external_order_id") or data.get("order_id") or "").strip() or None
+    user_id_for_cache_invalidate = ""
 
     try:
         with session_scope() as session:
             repo = BillingRepository(session)
             result = process_payment_webhook(repo, event_dict)
+            if external_order_id:
+                order = repo.get_order_by_external_order_id(external_order_id)
+                if order is not None:
+                    user_id_for_cache_invalidate = str(getattr(order, "user_id", "") or "")
             repo.record_audit_log(
                 provider=provider,
                 event_type=event_type,
@@ -3515,6 +3926,8 @@ async def payment_webhook(request: Request) -> PaymentWebhookResponse:
                 detail=str(exc),
             )
         raise
+    if user_id_for_cache_invalidate:
+        invalidate_user_entitlements(user_id_for_cache_invalidate)
     return PaymentWebhookResponse(**result)
 
 
@@ -3661,11 +4074,15 @@ async def wechatpay_webhook(request: Request) -> JSONResponse:
             "paid_at": success_time,
         },
     }
+    user_id_for_cache_invalidate = ""
 
     try:
         with session_scope() as session:
             repo = BillingRepository(session)
             result = process_payment_webhook(repo, event)
+            order = repo.get_order_by_external_order_id(str(external_order_id))
+            if order is not None:
+                user_id_for_cache_invalidate = str(getattr(order, "user_id", "") or "")
             repo.record_audit_log(
                 provider="wechatpay",
                 event_type=event_type,
@@ -3708,6 +4125,8 @@ async def wechatpay_webhook(request: Request) -> JSONResponse:
             )
         raise
 
+    if user_id_for_cache_invalidate:
+        invalidate_user_entitlements(user_id_for_cache_invalidate)
     return JSONResponse(status_code=200, content={"code": "SUCCESS", "message": "SUCCESS"})
 
 
