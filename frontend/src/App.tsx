@@ -49,6 +49,50 @@ type BillingPlan = {
   active: boolean;
 };
 
+const BILLING_FALLBACK_PLANS: BillingPlan[] = [
+  {
+    plan_id: "seed_monthly_198",
+    code: "monthly_198",
+    name: "月度订阅",
+    description: "适合高频日常协作，快速交付关键分析。",
+    currency: "cny",
+    price_cents: 19800,
+    monthly_points: 10000,
+    active: true,
+  },
+  {
+    plan_id: "seed_quarterly_398",
+    code: "quarterly_398",
+    name: "季度订阅",
+    description: "热门方案，兼顾稳定产出与成本效率。",
+    currency: "cny",
+    price_cents: 39800,
+    monthly_points: 30000,
+    active: true,
+  },
+  {
+    plan_id: "seed_yearly_1980",
+    code: "yearly_1980",
+    name: "年度订阅",
+    description: "适合长期项目与管理层持续决策场景。",
+    currency: "cny",
+    price_cents: 198000,
+    monthly_points: 150000,
+    active: true,
+  },
+];
+
+function cloneBillingFallbackPlans(): BillingPlan[] {
+  return BILLING_FALLBACK_PLANS.map((item) => ({ ...item }));
+}
+
+function normalizePlansOrFallback(rows: BillingPlan[] | null | undefined): BillingPlan[] {
+  if (Array.isArray(rows) && rows.length > 0) {
+    return rows;
+  }
+  return cloneBillingFallbackPlans();
+}
+
 type BillingCheckoutResponse = {
   provider: string;
   checkout_url: string;
@@ -1446,7 +1490,7 @@ function BillingPage({
   role: string;
   pushToast: (toast: Toast) => void;
 }) {
-  const [plans, setPlans] = useState<BillingPlan[]>([]);
+  const [plans, setPlans] = useState<BillingPlan[]>(() => cloneBillingFallbackPlans());
   const [subscription, setSubscription] = useState<BillingSubscriptionSnapshot | null>(null);
   const [points, setPoints] = useState<BillingPointsSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1484,10 +1528,11 @@ function BillingPage({
     setLoading(true);
     try {
       const data = await loadPlans();
-      setPlans(Array.isArray(data) ? data : []);
+      setPlans(normalizePlansOrFallback(Array.isArray(data) ? data : []));
       await loadStatus();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      setPlans((prev) => (Array.isArray(prev) && prev.length > 0 ? prev : cloneBillingFallbackPlans()));
       pushToast({ type: "error", message: "会员数据加载失败", detail: message });
     } finally {
       setLoading(false);
@@ -1547,8 +1592,9 @@ function BillingPage({
   const active = subscription?.status === "active";
   const activePlanCode = subscription?.plan_code || null;
   const visiblePlans = useMemo(() => {
-    if (hasAdminAccess(role)) return plans;
-    return plans.filter((item) => item.active);
+    const source = hasAdminAccess(role) ? plans : plans.filter((item) => item.active);
+    if (source.length > 0) return source;
+    return cloneBillingFallbackPlans();
   }, [plans, role]);
 
   const showcasePlans = useMemo(() => {
@@ -1946,7 +1992,7 @@ function PointsPaywallModal({
   pushToast: (toast: Toast) => void;
 }) {
   const [loading, setLoading] = useState(false);
-  const [plans, setPlans] = useState<BillingPlan[]>([]);
+  const [plans, setPlans] = useState<BillingPlan[]>(() => cloneBillingFallbackPlans());
   const [points, setPoints] = useState<BillingPointsSnapshot | null>(null);
   const [checkoutBusy, setCheckoutBusy] = useState<string | null>(null);
   const [paymentState, setPaymentState] = useState<{
@@ -1967,7 +2013,7 @@ function PointsPaywallModal({
         throw new Error(text || `load plans failed (${plansResp.status})`);
       }
       const planRows = (await plansResp.json()) as BillingPlan[];
-      setPlans(Array.isArray(planRows) ? planRows : []);
+      setPlans(normalizePlansOrFallback(Array.isArray(planRows) ? planRows : []));
       if (pointsResp.ok) {
         setPoints((await pointsResp.json()) as BillingPointsSnapshot);
       } else {
@@ -1975,6 +2021,7 @@ function PointsPaywallModal({
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      setPlans((prev) => (Array.isArray(prev) && prev.length > 0 ? prev : cloneBillingFallbackPlans()));
       pushToast({ type: "error", message: "充值面板加载失败", detail: message });
     } finally {
       setLoading(false);
@@ -1991,9 +2038,11 @@ function PointsPaywallModal({
   }, [open, refresh]);
 
   const activePlans = useMemo(() => {
-    return plans
-      .filter((item) => item.active)
-      .sort((a, b) => a.price_cents - b.price_cents || a.name.localeCompare(b.name));
+    const purchasable = plans.filter((item) => item.active);
+    if (purchasable.length === 0) {
+      return cloneBillingFallbackPlans();
+    }
+    return purchasable.sort((a, b) => a.price_cents - b.price_cents || a.name.localeCompare(b.name));
   }, [plans]);
 
   const startCheckout = useCallback(
