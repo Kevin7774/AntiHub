@@ -15,6 +15,7 @@ from .models import (
     Order,
     OrderStatus,
     Plan,
+    PlanEntitlement,
     PointAccount,
     PointFlow,
     PointFlowType,
@@ -22,6 +23,8 @@ from .models import (
     SubscriptionStatus,
     Tenant,
 )
+
+_UNSET = object()
 
 
 def _as_utc_aware(dt: datetime) -> datetime:
@@ -332,19 +335,31 @@ class BillingRepository:
         currency: str = "usd",
         description: Optional[str] = None,
         active: bool = True,
+        billing_cycle: Optional[str] = None,
+        trial_days: Optional[int] = None,
+        metadata_json: Optional[dict[str, Any]] = None,
     ) -> Plan:
         existing = self.get_plan_by_code(code)
         if existing:
             return existing
-        plan = Plan(
-            code=code,
-            name=name,
-            price_cents=price_cents,
-            monthly_points=monthly_points,
-            currency=currency,
-            description=description,
-            active=active,
-        )
+        plan_kwargs: dict[str, Any] = {
+            "code": code,
+            "name": name,
+            "price_cents": price_cents,
+            "monthly_points": monthly_points,
+            "currency": currency,
+            "description": description,
+            "active": active,
+        }
+        if billing_cycle is not None:
+            plan_kwargs["billing_cycle"] = str(billing_cycle).strip().lower()
+        if trial_days is not None:
+            plan_kwargs["trial_days"] = int(trial_days)
+        if metadata_json is not None:
+            plan_kwargs["metadata_json"] = (
+                dict(metadata_json) if isinstance(metadata_json, dict) else metadata_json
+            )
+        plan = Plan(**plan_kwargs)
         self.session.add(plan)
         self.session.flush()
         return plan
@@ -366,6 +381,9 @@ class BillingRepository:
         price_cents: Optional[int] = None,
         monthly_points: Optional[int] = None,
         active: Optional[bool] = None,
+        billing_cycle: Optional[str] = None,
+        trial_days: Optional[int] = None,
+        metadata_json: Optional[dict[str, Any]] = None,
         now: Optional[datetime] = None,
     ) -> Plan:
         plan = self.session.get(Plan, plan_id)
@@ -386,6 +404,12 @@ class BillingRepository:
             plan.monthly_points = int(monthly_points)
         if active is not None:
             plan.active = bool(active)
+        if billing_cycle is not None:
+            plan.billing_cycle = str(billing_cycle).strip().lower() or None
+        if trial_days is not None:
+            plan.trial_days = int(trial_days)
+        if metadata_json is not None:
+            plan.metadata_json = dict(metadata_json) if isinstance(metadata_json, dict) else metadata_json
 
         current = _as_utc_aware(now) if now else datetime.now(timezone.utc)
         plan.updated_at = current
@@ -397,6 +421,195 @@ class BillingRepository:
         if not include_inactive:
             query = query.where(Plan.active.is_(True))
         return list(self.session.scalars(query).all())
+
+    def deactivate_plan(self, plan_id: str, *, now: Optional[datetime] = None) -> Plan:
+        plan = self.session.get(Plan, plan_id)
+        if not plan:
+            raise BillingStateError(f"plan not found: {plan_id}")
+        current = _as_utc_aware(now) if now else datetime.now(timezone.utc)
+        plan.active = False
+        plan.updated_at = current
+        self.session.flush()
+        return plan
+
+    def get_plan_entitlement(self, entitlement_id: str) -> Optional[PlanEntitlement]:
+        return self.session.get(PlanEntitlement, entitlement_id)
+
+    def get_plan_entitlement_by_key(self, *, plan_id: str, key: str) -> Optional[PlanEntitlement]:
+        normalized_plan_id = str(plan_id or "").strip()
+        normalized_key = str(key or "").strip()
+        if not normalized_plan_id or not normalized_key:
+            return None
+        return self.session.scalar(
+            select(PlanEntitlement).where(
+                PlanEntitlement.plan_id == normalized_plan_id,
+                PlanEntitlement.key == normalized_key,
+            )
+        )
+
+    def list_plan_entitlements(
+        self,
+        *,
+        plan_id: Optional[str] = None,
+        include_disabled: bool = True,
+    ) -> list[PlanEntitlement]:
+        query = select(PlanEntitlement).order_by(PlanEntitlement.created_at.asc(), PlanEntitlement.key.asc())
+        if plan_id:
+            query = query.where(PlanEntitlement.plan_id == str(plan_id).strip())
+        if not include_disabled:
+            query = query.where(PlanEntitlement.enabled.is_(True))
+        return list(self.session.scalars(query).all())
+
+    def create_plan_entitlement(
+        self,
+        *,
+        plan_id: str,
+        key: str,
+        enabled: bool = True,
+        value_json: Any = None,
+        limit_value: Optional[int] = None,
+        metadata_json: Optional[dict[str, Any]] = None,
+        now: Optional[datetime] = None,
+    ) -> PlanEntitlement:
+        normalized_plan_id = str(plan_id or "").strip()
+        normalized_key = str(key or "").strip()
+        if not normalized_plan_id:
+            raise BillingStateError("plan_id is required")
+        if not normalized_key:
+            raise BillingStateError("entitlement key is required")
+        if self.get_plan_by_id(normalized_plan_id) is None:
+            raise BillingStateError(f"plan not found: {normalized_plan_id}")
+
+        existing = self.get_plan_entitlement_by_key(plan_id=normalized_plan_id, key=normalized_key)
+        if existing is not None:
+            return existing
+
+        current = _as_utc_aware(now) if now else datetime.now(timezone.utc)
+        item = PlanEntitlement(
+            plan_id=normalized_plan_id,
+            key=normalized_key,
+            enabled=bool(enabled),
+            value_json=value_json,
+            limit_value=(int(limit_value) if limit_value is not None else None),
+            metadata_json=(dict(metadata_json) if isinstance(metadata_json, dict) else metadata_json),
+            created_at=current,
+            updated_at=current,
+        )
+        self.session.add(item)
+        self.session.flush()
+        return item
+
+    def update_plan_entitlement(
+        self,
+        entitlement_id: str,
+        *,
+        key: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        value_json: Any = _UNSET,
+        limit_value: Any = _UNSET,
+        metadata_json: Any = _UNSET,
+        now: Optional[datetime] = None,
+    ) -> PlanEntitlement:
+        item = self.get_plan_entitlement(entitlement_id)
+        if item is None:
+            raise BillingStateError(f"plan entitlement not found: {entitlement_id}")
+
+        if key is not None:
+            normalized_key = str(key or "").strip()
+            if not normalized_key:
+                raise BillingStateError("entitlement key is required")
+            item.key = normalized_key
+        if enabled is not None:
+            item.enabled = bool(enabled)
+        if value_json is not _UNSET:
+            item.value_json = value_json
+        if limit_value is not _UNSET:
+            item.limit_value = int(limit_value) if limit_value is not None else None
+        if metadata_json is not _UNSET:
+            item.metadata_json = dict(metadata_json) if isinstance(metadata_json, dict) else metadata_json
+        item.updated_at = _as_utc_aware(now) if now else datetime.now(timezone.utc)
+        self.session.flush()
+        return item
+
+    def delete_plan_entitlement(self, entitlement_id: str) -> bool:
+        item = self.get_plan_entitlement(entitlement_id)
+        if item is None:
+            return False
+        self.session.delete(item)
+        self.session.flush()
+        return True
+
+    def bind_user_plan(
+        self,
+        *,
+        user_id: str,
+        plan_id: str,
+        duration_days: int = 30,
+        auto_renew: bool = False,
+        now: Optional[datetime] = None,
+    ) -> Subscription:
+        normalized_user_id = str(user_id or "").strip()
+        normalized_plan_id = str(plan_id or "").strip()
+        if not normalized_user_id:
+            raise BillingStateError("user_id is required")
+        if not normalized_plan_id:
+            raise BillingStateError("plan_id is required")
+        if self.get_auth_user(normalized_user_id) is None:
+            raise BillingStateError(f"user not found: {normalized_user_id}")
+        if self.get_plan_by_id(normalized_plan_id) is None:
+            raise BillingStateError(f"plan not found: {normalized_plan_id}")
+
+        current = _as_utc_aware(now) if now else datetime.now(timezone.utc)
+        active_subscriptions = list(
+            self.session.scalars(
+                select(Subscription).where(
+                    Subscription.user_id == normalized_user_id,
+                    Subscription.status == SubscriptionStatus.ACTIVE,
+                )
+            ).all()
+        )
+        for sub in active_subscriptions:
+            sub.status = SubscriptionStatus.CANCELED
+            sub.canceled_at = current
+            sub.updated_at = current
+
+        lifetime_days = max(1, int(duration_days))
+        subscription = Subscription(
+            user_id=normalized_user_id,
+            plan_id=normalized_plan_id,
+            status=SubscriptionStatus.ACTIVE,
+            starts_at=current,
+            expires_at=current + timedelta(days=lifetime_days),
+            auto_renew=bool(auto_renew),
+            created_at=current,
+            updated_at=current,
+        )
+        self.session.add(subscription)
+        self.session.flush()
+        return subscription
+
+    def list_active_subscription_user_ids_by_plan(
+        self,
+        *,
+        plan_id: str,
+        now: Optional[datetime] = None,
+        limit: int = 5000,
+    ) -> list[str]:
+        normalized_plan_id = str(plan_id or "").strip()
+        if not normalized_plan_id:
+            return []
+        current = _as_utc_aware(now) if now else datetime.now(timezone.utc)
+        query = (
+            select(Subscription.user_id)
+            .where(
+                Subscription.plan_id == normalized_plan_id,
+                Subscription.status == SubscriptionStatus.ACTIVE,
+                Subscription.expires_at > current,
+            )
+            .limit(max(1, min(int(limit), 20000)))
+        )
+        rows = self.session.scalars(query).all()
+        return sorted({str(item).strip() for item in rows if str(item).strip()})
 
     def create_order(
         self,

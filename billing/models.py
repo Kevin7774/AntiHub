@@ -3,9 +3,9 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -77,12 +77,52 @@ class Plan(Base):
     currency: Mapped[str] = mapped_column(String(8), default="usd")
     price_cents: Mapped[int] = mapped_column(Integer, default=0)
     monthly_points: Mapped[int] = mapped_column(Integer, default=0)
+    billing_cycle: Mapped[Optional[str]] = mapped_column(
+        String(16),
+        nullable=True,
+        server_default=text("'monthly'"),
+        deferred=True,
+    )
+    trial_days: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        server_default=text("0"),
+        deferred=True,
+    )
+    metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        "metadata",
+        JSON,
+        nullable=True,
+        server_default=text("'{}'"),
+        deferred=True,
+    )
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
+    entitlements: Mapped[list["PlanEntitlement"]] = relationship(back_populates="plan")
     orders: Mapped[list["Order"]] = relationship(back_populates="plan")
     subscriptions: Mapped[list["Subscription"]] = relationship(back_populates="plan")
+
+
+class PlanEntitlement(Base):
+    __tablename__ = "billing_plan_entitlements"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    plan_id: Mapped[str] = mapped_column(ForeignKey("billing_plans.id"), index=True)
+    key: Mapped[str] = mapped_column(String(128), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    value_json: Mapped[Optional[Any]] = mapped_column(
+        "value",
+        JSON,
+        nullable=True,
+    )
+    limit_value: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    plan: Mapped[Plan] = relationship(back_populates="entitlements")
 
 
 class Order(Base):
@@ -188,3 +228,4 @@ Index("ix_billing_subscriptions_user_status", Subscription.user_id, Subscription
 Index("ix_billing_orders_user_status", Order.user_id, Order.status)
 Index("ix_billing_point_accounts_balance", PointAccount.balance)
 Index("ix_auth_users_tenant_active", AuthUser.tenant_id, AuthUser.active)
+Index("ix_billing_plan_entitlements_plan_key", PlanEntitlement.plan_id, PlanEntitlement.key, unique=True)

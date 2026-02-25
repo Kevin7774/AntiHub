@@ -18,6 +18,7 @@ from .models import (
     Order,
     OrderStatus,
     Plan,
+    PlanEntitlement,
     PointAccount,
     PointFlow,
     PointFlowType,
@@ -38,6 +39,12 @@ from .service import (
     process_payment_webhook,
     verify_webhook_signature,
 )
+from .entitlements import (
+    get_user_entitlements,
+    invalidate_plan_entitlements,
+    invalidate_user_entitlements,
+    require_entitlement,
+)
 
 __all__ = [
     "Base",
@@ -45,6 +52,7 @@ __all__ = [
     "SessionLocal",
     "AuthUser",
     "Plan",
+    "PlanEntitlement",
     "Order",
     "Subscription",
     "PointFlow",
@@ -68,6 +76,10 @@ __all__ = [
     "PaymentWebhookError",
     "verify_webhook_signature",
     "process_payment_webhook",
+    "get_user_entitlements",
+    "invalidate_plan_entitlements",
+    "invalidate_user_entitlements",
+    "require_entitlement",
     "build_session_factory",
     "init_billing_db",
     "session_scope",
