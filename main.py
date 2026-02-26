@@ -785,6 +785,11 @@ def require_root(identity: AuthIdentity = Depends(get_current_identity)) -> Auth
     return identity
 
 
+def require_saas_admin(identity: AuthIdentity = Depends(require_admin)) -> AuthIdentity:
+    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+    return identity
+
+
 def _ensure_feature_enabled(enabled: bool) -> None:
     if not enabled:
         raise HTTPException(status_code=404, detail="feature disabled")
@@ -2748,10 +2753,8 @@ async def auth_permissions(identity: AuthIdentity = Depends(get_current_identity
 @app.post("/org/tenants", response_model=TenantInfo)
 async def create_tenant(
     payload: TenantCreateRequest,
-    identity: AuthIdentity = Depends(require_admin),
+    identity: AuthIdentity = Depends(require_root),
 ) -> TenantInfo:
-    if not _is_root_role(identity):
-        raise HTTPException(status_code=403, detail="root role required")
     with session_scope() as session:
         repo = BillingRepository(session)
         if payload.code:
@@ -2770,10 +2773,8 @@ async def create_tenant(
 async def update_tenant(
     tenant_id: str,
     payload: TenantUpdateRequest,
-    identity: AuthIdentity = Depends(require_admin),
+    identity: AuthIdentity = Depends(require_root),
 ) -> TenantInfo:
-    if not _is_root_role(identity):
-        raise HTTPException(status_code=403, detail="root role required")
     if payload.code is None and payload.name is None and payload.active is None:
         raise HTTPException(status_code=400, detail="no fields to update")
     with session_scope() as session:
@@ -3337,8 +3338,7 @@ async def update_billing_plan(
 
 
 @app.get("/admin/saas/plans", response_model=List[SaaSPlanResponse])
-async def saas_list_plans(_: AuthIdentity = Depends(require_admin)) -> List[SaaSPlanResponse]:
-    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+async def saas_list_plans(_: AuthIdentity = Depends(require_saas_admin)) -> List[SaaSPlanResponse]:
     with session_scope() as session:
         repo = BillingRepository(session)
         plans = repo.list_plans(include_inactive=True)
@@ -3348,9 +3348,8 @@ async def saas_list_plans(_: AuthIdentity = Depends(require_admin)) -> List[SaaS
 @app.post("/admin/saas/plans", response_model=SaaSPlanResponse)
 async def saas_create_plan(
     payload: BillingPlanCreateRequest,
-    _: AuthIdentity = Depends(require_admin),
+    _: AuthIdentity = Depends(require_saas_admin),
 ) -> SaaSPlanResponse:
-    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
     with session_scope() as session:
         repo = BillingRepository(session)
         plan = repo.create_plan(
@@ -3372,9 +3371,8 @@ async def saas_create_plan(
 async def saas_update_plan(
     plan_id: str,
     payload: BillingPlanUpdateRequest,
-    _: AuthIdentity = Depends(require_admin),
+    _: AuthIdentity = Depends(require_saas_admin),
 ) -> SaaSPlanResponse:
-    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
     with session_scope() as session:
         repo = BillingRepository(session)
         try:
@@ -3397,8 +3395,7 @@ async def saas_update_plan(
 
 
 @app.delete("/admin/saas/plans/{plan_id}", response_model=SaaSPlanResponse)
-async def saas_deactivate_plan(plan_id: str, _: AuthIdentity = Depends(require_admin)) -> SaaSPlanResponse:
-    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
+async def saas_deactivate_plan(plan_id: str, _: AuthIdentity = Depends(require_saas_admin)) -> SaaSPlanResponse:
     with session_scope() as session:
         repo = BillingRepository(session)
         try:
@@ -3413,9 +3410,8 @@ async def saas_deactivate_plan(plan_id: str, _: AuthIdentity = Depends(require_a
 async def saas_list_plan_entitlements(
     plan_id: str,
     include_disabled: bool = Query(True),
-    _: AuthIdentity = Depends(require_admin),
+    _: AuthIdentity = Depends(require_saas_admin),
 ) -> List[BillingPlanEntitlementResponse]:
-    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
     with session_scope() as session:
         repo = BillingRepository(session)
         plan = repo.get_plan_by_id(plan_id)
@@ -3429,9 +3425,8 @@ async def saas_list_plan_entitlements(
 async def saas_create_plan_entitlement(
     plan_id: str,
     payload: BillingPlanEntitlementCreateRequest,
-    _: AuthIdentity = Depends(require_admin),
+    _: AuthIdentity = Depends(require_saas_admin),
 ) -> BillingPlanEntitlementResponse:
-    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
     with session_scope() as session:
         repo = BillingRepository(session)
         try:
@@ -3453,9 +3448,8 @@ async def saas_create_plan_entitlement(
 async def saas_update_plan_entitlement(
     entitlement_id: str,
     payload: BillingPlanEntitlementUpdateRequest,
-    _: AuthIdentity = Depends(require_admin),
+    _: AuthIdentity = Depends(require_saas_admin),
 ) -> BillingPlanEntitlementResponse:
-    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
     with session_scope() as session:
         repo = BillingRepository(session)
         patch = payload.model_dump(exclude_unset=True)
@@ -3481,9 +3475,8 @@ async def saas_update_plan_entitlement(
 @app.delete("/admin/saas/entitlements/{entitlement_id}", response_model=Dict[str, Any])
 async def saas_delete_plan_entitlement(
     entitlement_id: str,
-    _: AuthIdentity = Depends(require_admin),
+    _: AuthIdentity = Depends(require_saas_admin),
 ) -> Dict[str, Any]:
-    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
     with session_scope() as session:
         repo = BillingRepository(session)
         item = repo.get_plan_entitlement(entitlement_id)
@@ -3499,9 +3492,8 @@ async def saas_delete_plan_entitlement(
 async def saas_bind_user_plan(
     username: str,
     payload: BillingBindUserPlanRequest,
-    _: AuthIdentity = Depends(require_admin),
+    _: AuthIdentity = Depends(require_saas_admin),
 ) -> BillingSubscriptionSnapshot:
-    _ensure_feature_enabled(FEATURE_SAAS_ADMIN_API)
     with session_scope() as session:
         repo = BillingRepository(session)
         plan = None

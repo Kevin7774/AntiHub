@@ -45,6 +45,9 @@ docker compose version
 
 配置优先级：环境变量 > `config.yaml` > 默认值。
 
+Auth/Admin 变量建议与行为矩阵见：
+- `docs/operations/auth_admin_matrix.md`
+
 ## 代理配置（Docker Desktop / WSL2）
 > 目标：让 `docker pull`、`docker build`（Dockerfile 内部网络请求）和 `docker run` 稳定走代理。
 
