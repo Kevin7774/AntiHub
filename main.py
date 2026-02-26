@@ -97,6 +97,7 @@ from config import (
     DISABLE_RECOMMEND_RATE_LIMIT,
     FEATURE_SAAS_ADMIN_API,
     FEATURE_SAAS_ENTITLEMENTS,
+    FEATURE_MULTI_TENANT_FOUNDATION,
     GIT_SHA,
     ONE_CLICK_DEPLOY_POINTS_COST,
     OPENCLAW_BASE_URL,
@@ -162,6 +163,7 @@ from storage import (
     update_case,
 )
 from templates_store import get_template, load_templates
+from tenant_context import TENANT_CONTEXT_HEADER, TenantContext, TenantContextError, resolve_tenant_context
 from visualize.store import VisualStore, visual_cache_key, visuals_dir
 from worker import (
     BuildError,
@@ -641,6 +643,7 @@ async def security_headers_middleware(request: Request, call_next):
 async def auth_middleware(request: Request, call_next):
     if not AUTH_ENABLED or request.method.upper() == "OPTIONS" or _is_public_path(request.url.path):
         return await call_next(request)
+    tenant_context = TenantContext(tenant_id=None, source="auth_unresolved")
     try:
         authorization = request.headers.get("Authorization")
         if authorization:
@@ -670,8 +673,22 @@ async def auth_middleware(request: Request, call_next):
                         role=_normalize_role_value(str(user.role)),
                         tenant_id=tenant_id,
                     )
+                tenant_context = resolve_tenant_context(
+                    repo=repo,
+                    identity=identity,
+                    requested_tenant_id=request.headers.get(TENANT_CONTEXT_HEADER),
+                    feature_enabled=FEATURE_MULTI_TENANT_FOUNDATION,
+                )
+                identity = AuthIdentity(
+                    username=identity.username,
+                    role=_normalize_role_value(identity.role),
+                    tenant_id=tenant_context.tenant_id,
+                )
+    except TenantContextError as exc:
+        return JSONResponse(status_code=int(exc.status_code), content={"detail": str(exc.detail)})
     except AuthError as exc:
         return JSONResponse(status_code=401, content={"detail": str(exc)})
+    request.state.tenant_context = tenant_context.as_dict()
     request.state.auth_identity = identity
     return await call_next(request)
 
@@ -798,6 +815,21 @@ def _ensure_feature_enabled(enabled: bool) -> None:
 def _identity_tenant_id(repo: BillingRepository, identity: AuthIdentity) -> str | None:
     claimed = str(identity.tenant_id or "").strip() or None
     user = repo.get_auth_user(identity.username)
+    if FEATURE_MULTI_TENANT_FOUNDATION and claimed:
+        if user is None:
+            return claimed
+        db_tenant = str(getattr(user, "tenant_id", "") or "").strip() or None
+        if claimed == db_tenant:
+            return claimed
+        if _is_root_role(identity):
+            return claimed
+        member = repo.get_tenant_member(
+            tenant_id=claimed,
+            username=identity.username,
+            include_inactive=False,
+        )
+        if member is not None:
+            return claimed
     if user is None:
         return claimed
     db_tenant = str(getattr(user, "tenant_id", "") or "").strip() or None
@@ -2736,9 +2768,7 @@ async def auth_permissions(identity: AuthIdentity = Depends(get_current_identity
     try:
         with session_scope() as session:
             repo = BillingRepository(session)
-            user = repo.get_auth_user(identity.username)
-            if user is not None:
-                tenant_id = str(getattr(user, "tenant_id", "") or "").strip() or None
+            tenant_id = _identity_tenant_id(repo, identity) or None
     except Exception as exc:  # noqa: BLE001
         log_event(APP_LOGGER, logging.WARNING, "auth.permissions.tenant_resolve_failed", error=str(exc))
     return AuthPermissionSnapshot(
