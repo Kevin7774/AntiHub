@@ -211,6 +211,28 @@ class BillingRepository:
             query = query.where(TenantMember.active.is_(True))
         return self.session.scalar(query)
 
+    def list_tenant_members(
+        self,
+        tenant_id: str,
+        *,
+        include_inactive: bool = False,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[TenantMember]:
+        normalized_tenant_id = str(tenant_id or "").strip()
+        if not normalized_tenant_id:
+            return []
+        query: Select[Any] = (
+            select(TenantMember)
+            .where(TenantMember.tenant_id == normalized_tenant_id)
+            .order_by(TenantMember.created_at.asc(), TenantMember.username.asc())
+            .limit(max(1, min(int(limit), 500)))
+            .offset(max(0, int(offset)))
+        )
+        if not include_inactive:
+            query = query.where(TenantMember.active.is_(True))
+        return list(self.session.scalars(query).all())
+
     def list_tenant_members_for_user(
         self,
         username: str,
@@ -285,6 +307,32 @@ class BillingRepository:
         if metadata_json is not None:
             member.metadata_json = dict(metadata_json) if isinstance(metadata_json, dict) else metadata_json
         member.updated_at = current
+        self.session.flush()
+        return member
+
+    def deactivate_tenant_member(
+        self,
+        *,
+        tenant_id: str,
+        username: str,
+        now: Optional[datetime] = None,
+    ) -> TenantMember:
+        normalized_tenant_id = str(tenant_id or "").strip()
+        normalized_username = str(username or "").strip()
+        if not normalized_tenant_id:
+            raise BillingStateError("tenant_id is required")
+        if not normalized_username:
+            raise BillingStateError("username is required")
+        member = self.get_tenant_member(
+            tenant_id=normalized_tenant_id,
+            username=normalized_username,
+            include_inactive=True,
+        )
+        if member is None:
+            raise BillingStateError("tenant membership not found")
+        member.active = False
+        member.is_default = False
+        member.updated_at = _as_utc_aware(now) if now else datetime.now(timezone.utc)
         self.session.flush()
         return member
 
