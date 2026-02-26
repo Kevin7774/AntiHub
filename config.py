@@ -169,6 +169,11 @@ REDIS_DISABLED = str(_get("REDIS_DISABLED", "false")).lower() in {"1", "true", "
 CELERY_ALWAYS_EAGER = str(_get("CELERY_ALWAYS_EAGER", "false")).lower() in {"1", "true", "yes"}
 FEATURE_SAAS_ENTITLEMENTS = str(_get("FEATURE_SAAS_ENTITLEMENTS", "false")).lower() in {"1", "true", "yes"}
 FEATURE_SAAS_ADMIN_API = str(_get("FEATURE_SAAS_ADMIN_API", "false")).lower() in {"1", "true", "yes"}
+FEATURE_MULTI_TENANT_FOUNDATION = str(_get("FEATURE_MULTI_TENANT_FOUNDATION", "false")).lower() in {
+    "1",
+    "true",
+    "yes",
+}
 API_HOST = _get("API_HOST", "127.0.0.1")
 API_PORT = int(_get("API_PORT", "8010"))
 _root_path = str(_get("ROOT_PATH", "")).strip()

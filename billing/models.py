@@ -28,6 +28,8 @@ class Tenant(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     users: Mapped[list["AuthUser"]] = relationship(back_populates="tenant")
+    members: Mapped[list["TenantMember"]] = relationship(back_populates="tenant")
+    settings: Mapped[list["TenantSetting"]] = relationship(back_populates="tenant")
 
 
 class AuthUser(Base):
@@ -43,6 +45,38 @@ class AuthUser(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     tenant: Mapped[Optional[Tenant]] = relationship(back_populates="users")
+    tenant_memberships: Mapped[list["TenantMember"]] = relationship(back_populates="user")
+
+
+class TenantMember(Base):
+    __tablename__ = "auth_tenant_members"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("auth_tenants.id"), index=True)
+    username: Mapped[str] = mapped_column(ForeignKey("auth_users.username"), index=True)
+    role: Mapped[str] = mapped_column(String(16), default="member", index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    tenant: Mapped[Tenant] = relationship(back_populates="members")
+    user: Mapped[AuthUser] = relationship(back_populates="tenant_memberships")
+
+
+class TenantSetting(Base):
+    __tablename__ = "auth_tenant_settings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("auth_tenants.id"), index=True)
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    value_json: Mapped[Optional[Any]] = mapped_column("value", JSON, nullable=True)
+    metadata_json: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    tenant: Mapped[Tenant] = relationship(back_populates="settings")
 
 
 class OrderStatus(str, enum.Enum):
@@ -228,4 +262,7 @@ Index("ix_billing_subscriptions_user_status", Subscription.user_id, Subscription
 Index("ix_billing_orders_user_status", Order.user_id, Order.status)
 Index("ix_billing_point_accounts_balance", PointAccount.balance)
 Index("ix_auth_users_tenant_active", AuthUser.tenant_id, AuthUser.active)
+Index("ix_auth_tenant_members_tenant_user", TenantMember.tenant_id, TenantMember.username, unique=True)
+Index("ix_auth_tenant_members_username_active", TenantMember.username, TenantMember.active)
+Index("ix_auth_tenant_settings_tenant_key", TenantSetting.tenant_id, TenantSetting.key, unique=True)
 Index("ix_billing_plan_entitlements_plan_key", PlanEntitlement.plan_id, PlanEntitlement.key, unique=True)

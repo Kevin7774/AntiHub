@@ -97,6 +97,7 @@ from config import (
     DISABLE_RECOMMEND_RATE_LIMIT,
     FEATURE_SAAS_ADMIN_API,
     FEATURE_SAAS_ENTITLEMENTS,
+    FEATURE_MULTI_TENANT_FOUNDATION,
     GIT_SHA,
     ONE_CLICK_DEPLOY_POINTS_COST,
     OPENCLAW_BASE_URL,
@@ -162,6 +163,7 @@ from storage import (
     update_case,
 )
 from templates_store import get_template, load_templates
+from tenant_context import TENANT_CONTEXT_HEADER, TenantContext, TenantContextError, resolve_tenant_context
 from visualize.store import VisualStore, visual_cache_key, visuals_dir
 from worker import (
     BuildError,
@@ -178,7 +180,9 @@ IDEMPOTENCY_KEY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_\-:.]{0,127}$"
 EXTERNAL_ORDER_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_\-:.]{0,127}$"
 CURRENCY_PATTERN = r"^[A-Za-z]{3}$"
 TENANT_CODE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$"
+TENANT_SETTING_KEY_PATTERN = r"^[a-z][a-z0-9_.:-]{0,63}$"
 ENTITLEMENT_KEY_PATTERN = r"^[a-z][a-z0-9_:.\\-]{1,127}$"
+TENANT_MEMBER_ROLE_VALUES = {"owner", "admin", "member"}
 MALICIOUS_XSS_PATTERN = re.compile(r"(?is)<\s*/?\s*script\b|javascript:|on\w+\s*=")
 MALICIOUS_SQLI_PATTERN = re.compile(
     r"(?is)\bunion\b\s+\bselect\b|\bdrop\b\s+\btable\b|\bdelete\b\s+\bfrom\b|\binsert\b\s+\binto\b|\bor\b\s+1\s*=\s*1\b|\band\b\s+1\s*=\s*1\b"
@@ -641,6 +645,7 @@ async def security_headers_middleware(request: Request, call_next):
 async def auth_middleware(request: Request, call_next):
     if not AUTH_ENABLED or request.method.upper() == "OPTIONS" or _is_public_path(request.url.path):
         return await call_next(request)
+    tenant_context = TenantContext(tenant_id=None, source="auth_unresolved")
     try:
         authorization = request.headers.get("Authorization")
         if authorization:
@@ -670,8 +675,22 @@ async def auth_middleware(request: Request, call_next):
                         role=_normalize_role_value(str(user.role)),
                         tenant_id=tenant_id,
                     )
+                tenant_context = resolve_tenant_context(
+                    repo=repo,
+                    identity=identity,
+                    requested_tenant_id=request.headers.get(TENANT_CONTEXT_HEADER),
+                    feature_enabled=FEATURE_MULTI_TENANT_FOUNDATION,
+                )
+                identity = AuthIdentity(
+                    username=identity.username,
+                    role=_normalize_role_value(identity.role),
+                    tenant_id=tenant_context.tenant_id,
+                )
+    except TenantContextError as exc:
+        return JSONResponse(status_code=int(exc.status_code), content={"detail": str(exc.detail)})
     except AuthError as exc:
         return JSONResponse(status_code=401, content={"detail": str(exc)})
+    request.state.tenant_context = tenant_context.as_dict()
     request.state.auth_identity = identity
     return await call_next(request)
 
@@ -790,6 +809,11 @@ def require_saas_admin(identity: AuthIdentity = Depends(require_admin)) -> AuthI
     return identity
 
 
+def require_tenant_foundation_root(identity: AuthIdentity = Depends(require_root)) -> AuthIdentity:
+    _ensure_feature_enabled(FEATURE_MULTI_TENANT_FOUNDATION)
+    return identity
+
+
 def _ensure_feature_enabled(enabled: bool) -> None:
     if not enabled:
         raise HTTPException(status_code=404, detail="feature disabled")
@@ -798,6 +822,21 @@ def _ensure_feature_enabled(enabled: bool) -> None:
 def _identity_tenant_id(repo: BillingRepository, identity: AuthIdentity) -> str | None:
     claimed = str(identity.tenant_id or "").strip() or None
     user = repo.get_auth_user(identity.username)
+    if FEATURE_MULTI_TENANT_FOUNDATION and claimed:
+        if user is None:
+            return claimed
+        db_tenant = str(getattr(user, "tenant_id", "") or "").strip() or None
+        if claimed == db_tenant:
+            return claimed
+        if _is_root_role(identity):
+            return claimed
+        member = repo.get_tenant_member(
+            tenant_id=claimed,
+            username=identity.username,
+            include_inactive=False,
+        )
+        if member is not None:
+            return claimed
     if user is None:
         return claimed
     db_tenant = str(getattr(user, "tenant_id", "") or "").strip() or None
@@ -858,6 +897,15 @@ def _tenant_usernames(repo: BillingRepository, tenant_id: str) -> set[str]:
         offset=0,
     )
     return {str(user.username) for user in users if str(user.username)}
+
+
+def _normalize_tenant_setting_key(raw_key: str) -> str:
+    normalized = _require_safe_input("key", str(raw_key or "")).strip().lower()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="key is required")
+    if not re.fullmatch(TENANT_SETTING_KEY_PATTERN, normalized):
+        raise HTTPException(status_code=422, detail="invalid tenant setting key")
+    return normalized
 
 
 async def authenticate_websocket(websocket: WebSocket) -> AuthIdentity:
@@ -1255,6 +1303,44 @@ class TenantUpdateRequest(BaseModel):
             return None
         cleaned = _require_safe_input("name", str(value or "")).strip()
         return cleaned or None
+
+
+class TenantMemberInfo(BaseModel):
+    member_id: str
+    tenant_id: str
+    username: str
+    role: str
+    active: bool
+    is_default: bool
+    metadata: Optional[dict[str, Any]] = None
+
+
+class TenantMemberUpsertRequest(BaseModel):
+    role: str = Field(default="member", min_length=1, max_length=16)
+    active: bool = True
+    is_default: bool = False
+    metadata: Optional[dict[str, Any]] = None
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _normalize_member_role(cls, value: Any) -> str:
+        normalized = str(value or "member").strip().lower() or "member"
+        if normalized not in TENANT_MEMBER_ROLE_VALUES:
+            raise ValueError("invalid tenant member role")
+        return normalized
+
+
+class TenantSettingInfo(BaseModel):
+    setting_id: str
+    tenant_id: str
+    key: str
+    value: Any = None
+    metadata: Optional[dict[str, Any]] = None
+
+
+class TenantSettingUpsertRequest(BaseModel):
+    value: Any = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 class OrgUserCreateRequest(BaseModel):
@@ -2384,6 +2470,34 @@ def _to_tenant_response(tenant: Any) -> TenantInfo:
     )
 
 
+def _to_tenant_member_response(member: Any) -> TenantMemberInfo:
+    metadata_value = getattr(member, "metadata_json", None)
+    if not isinstance(metadata_value, dict):
+        metadata_value = None
+    return TenantMemberInfo(
+        member_id=str(getattr(member, "id", "")),
+        tenant_id=str(getattr(member, "tenant_id", "")),
+        username=str(getattr(member, "username", "")),
+        role=str(getattr(member, "role", "member") or "member"),
+        active=bool(getattr(member, "active", True)),
+        is_default=bool(getattr(member, "is_default", False)),
+        metadata=metadata_value,
+    )
+
+
+def _to_tenant_setting_response(setting: Any) -> TenantSettingInfo:
+    metadata_value = getattr(setting, "metadata_json", None)
+    if not isinstance(metadata_value, dict):
+        metadata_value = None
+    return TenantSettingInfo(
+        setting_id=str(getattr(setting, "id", "")),
+        tenant_id=str(getattr(setting, "tenant_id", "")),
+        key=str(getattr(setting, "key", "")),
+        value=getattr(setting, "value_json", None),
+        metadata=metadata_value,
+    )
+
+
 def _to_order_response(order: Any) -> BillingOrderResponse:
     plan_code = None
     try:
@@ -2736,9 +2850,7 @@ async def auth_permissions(identity: AuthIdentity = Depends(get_current_identity
     try:
         with session_scope() as session:
             repo = BillingRepository(session)
-            user = repo.get_auth_user(identity.username)
-            if user is not None:
-                tenant_id = str(getattr(user, "tenant_id", "") or "").strip() or None
+            tenant_id = _identity_tenant_id(repo, identity) or None
     except Exception as exc:  # noqa: BLE001
         log_event(APP_LOGGER, logging.WARNING, "auth.permissions.tenant_resolve_failed", error=str(exc))
     return AuthPermissionSnapshot(
@@ -2843,6 +2955,129 @@ async def list_tenant_users(
             )
             items.append(_to_auth_user_info(item_identity, repo))
         return items
+
+
+@app.get("/admin/tenants/{tenant_id}/members", response_model=List[TenantMemberInfo])
+@app.get("/org/tenants/{tenant_id}/members", response_model=List[TenantMemberInfo])
+async def list_tenant_members(
+    tenant_id: str,
+    include_inactive: bool = Query(False),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    identity: AuthIdentity = Depends(require_tenant_foundation_root),
+) -> List[TenantMemberInfo]:
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        if repo.get_tenant_by_id(tenant_id) is None:
+            raise HTTPException(status_code=404, detail="tenant not found")
+        members = repo.list_tenant_members(
+            tenant_id,
+            include_inactive=bool(include_inactive),
+            limit=limit,
+            offset=offset,
+        )
+        return [_to_tenant_member_response(item) for item in members]
+
+
+@app.put("/admin/tenants/{tenant_id}/members/{username}", response_model=TenantMemberInfo)
+@app.put("/org/tenants/{tenant_id}/members/{username}", response_model=TenantMemberInfo)
+async def upsert_tenant_member(
+    tenant_id: str,
+    username: str,
+    payload: TenantMemberUpsertRequest,
+    identity: AuthIdentity = Depends(require_tenant_foundation_root),
+) -> TenantMemberInfo:
+    normalized_username = _require_safe_input("username", str(username or "")).strip()
+    if not normalized_username:
+        raise HTTPException(status_code=400, detail="username is required")
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        if repo.get_tenant_by_id(tenant_id) is None:
+            raise HTTPException(status_code=404, detail="tenant not found")
+        if repo.get_auth_user(normalized_username) is None:
+            raise HTTPException(status_code=404, detail="user not found")
+        try:
+            member = repo.upsert_tenant_member(
+                tenant_id=tenant_id,
+                username=normalized_username,
+                role=payload.role,
+                active=payload.active,
+                is_default=payload.is_default,
+                metadata_json=payload.metadata,
+            )
+        except BillingStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _to_tenant_member_response(member)
+
+
+@app.delete("/admin/tenants/{tenant_id}/members/{username}", response_model=TenantMemberInfo)
+@app.delete("/org/tenants/{tenant_id}/members/{username}", response_model=TenantMemberInfo)
+async def deactivate_tenant_member(
+    tenant_id: str,
+    username: str,
+    identity: AuthIdentity = Depends(require_tenant_foundation_root),
+) -> TenantMemberInfo:
+    normalized_username = _require_safe_input("username", str(username or "")).strip()
+    if not normalized_username:
+        raise HTTPException(status_code=400, detail="username is required")
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        if repo.get_tenant_by_id(tenant_id) is None:
+            raise HTTPException(status_code=404, detail="tenant not found")
+        try:
+            member = repo.deactivate_tenant_member(
+                tenant_id=tenant_id,
+                username=normalized_username,
+            )
+        except BillingStateError as exc:
+            detail = str(exc)
+            if "not found" in detail.lower():
+                raise HTTPException(status_code=404, detail=detail) from exc
+            raise HTTPException(status_code=409, detail=detail) from exc
+        return _to_tenant_member_response(member)
+
+
+@app.get("/admin/tenants/{tenant_id}/settings/{key}", response_model=TenantSettingInfo)
+@app.get("/org/tenants/{tenant_id}/settings/{key}", response_model=TenantSettingInfo)
+async def get_tenant_setting(
+    tenant_id: str,
+    key: str,
+    identity: AuthIdentity = Depends(require_tenant_foundation_root),
+) -> TenantSettingInfo:
+    normalized_key = _normalize_tenant_setting_key(key)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        if repo.get_tenant_by_id(tenant_id) is None:
+            raise HTTPException(status_code=404, detail="tenant not found")
+        setting = repo.get_tenant_setting(tenant_id=tenant_id, key=normalized_key)
+        if setting is None:
+            raise HTTPException(status_code=404, detail="tenant setting not found")
+        return _to_tenant_setting_response(setting)
+
+
+@app.put("/admin/tenants/{tenant_id}/settings/{key}", response_model=TenantSettingInfo)
+@app.put("/org/tenants/{tenant_id}/settings/{key}", response_model=TenantSettingInfo)
+async def upsert_tenant_setting(
+    tenant_id: str,
+    key: str,
+    payload: TenantSettingUpsertRequest,
+    identity: AuthIdentity = Depends(require_tenant_foundation_root),
+) -> TenantSettingInfo:
+    normalized_key = _normalize_tenant_setting_key(key)
+    with session_scope() as session:
+        repo = BillingRepository(session)
+        if repo.get_tenant_by_id(tenant_id) is None:
+            raise HTTPException(status_code=404, detail="tenant not found")
+        try:
+            setting = repo.upsert_tenant_setting(
+                tenant_id=tenant_id,
+                key=normalized_key,
+                value_json=payload.value,
+                metadata_json=payload.metadata,
+            )
+        except BillingStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _to_tenant_setting_response(setting)
 
 
 @app.get("/admin/users", response_model=List[AuthUserInfo])

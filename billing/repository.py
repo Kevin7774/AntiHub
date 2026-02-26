@@ -22,6 +22,8 @@ from .models import (
     Subscription,
     SubscriptionStatus,
     Tenant,
+    TenantMember,
+    TenantSetting,
 )
 
 _UNSET = object()
@@ -189,6 +191,202 @@ class BillingRepository:
         tenant.updated_at = _as_utc_aware(now) if now else datetime.now(timezone.utc)
         self.session.flush()
         return tenant
+
+    def get_tenant_member(
+        self,
+        *,
+        tenant_id: str,
+        username: str,
+        include_inactive: bool = False,
+    ) -> Optional[TenantMember]:
+        normalized_tenant_id = str(tenant_id or "").strip()
+        normalized_username = str(username or "").strip()
+        if not normalized_tenant_id or not normalized_username:
+            return None
+        query = select(TenantMember).where(
+            TenantMember.tenant_id == normalized_tenant_id,
+            TenantMember.username == normalized_username,
+        )
+        if not include_inactive:
+            query = query.where(TenantMember.active.is_(True))
+        return self.session.scalar(query)
+
+    def list_tenant_members(
+        self,
+        tenant_id: str,
+        *,
+        include_inactive: bool = False,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[TenantMember]:
+        normalized_tenant_id = str(tenant_id or "").strip()
+        if not normalized_tenant_id:
+            return []
+        query: Select[Any] = (
+            select(TenantMember)
+            .where(TenantMember.tenant_id == normalized_tenant_id)
+            .order_by(TenantMember.created_at.asc(), TenantMember.username.asc())
+            .limit(max(1, min(int(limit), 500)))
+            .offset(max(0, int(offset)))
+        )
+        if not include_inactive:
+            query = query.where(TenantMember.active.is_(True))
+        return list(self.session.scalars(query).all())
+
+    def list_tenant_members_for_user(
+        self,
+        username: str,
+        *,
+        include_inactive: bool = False,
+        limit: int = 200,
+    ) -> list[TenantMember]:
+        normalized_username = str(username or "").strip()
+        if not normalized_username:
+            return []
+        query: Select[Any] = (
+            select(TenantMember)
+            .options(selectinload(TenantMember.tenant))
+            .where(TenantMember.username == normalized_username)
+            .order_by(TenantMember.created_at.asc())
+            .limit(max(1, min(int(limit), 1000)))
+        )
+        if not include_inactive:
+            query = query.where(TenantMember.active.is_(True))
+        return list(self.session.scalars(query).all())
+
+    def upsert_tenant_member(
+        self,
+        *,
+        tenant_id: str,
+        username: str,
+        role: str = "member",
+        active: bool = True,
+        is_default: bool = False,
+        metadata_json: Optional[dict[str, Any]] = None,
+        now: Optional[datetime] = None,
+    ) -> TenantMember:
+        normalized_tenant_id = str(tenant_id or "").strip()
+        normalized_username = str(username or "").strip()
+        if not normalized_tenant_id:
+            raise BillingStateError("tenant_id is required")
+        if not normalized_username:
+            raise BillingStateError("username is required")
+        if self.get_tenant_by_id(normalized_tenant_id) is None:
+            raise BillingStateError(f"tenant not found: {normalized_tenant_id}")
+        if self.get_auth_user(normalized_username) is None:
+            raise BillingStateError(f"user not found: {normalized_username}")
+
+        normalized_role = str(role or "member").strip().lower() or "member"
+        if normalized_role not in {"owner", "admin", "member"}:
+            normalized_role = "member"
+        current = _as_utc_aware(now) if now else datetime.now(timezone.utc)
+
+        member = self.get_tenant_member(
+            tenant_id=normalized_tenant_id,
+            username=normalized_username,
+            include_inactive=True,
+        )
+        if member is None:
+            member = TenantMember(
+                tenant_id=normalized_tenant_id,
+                username=normalized_username,
+                role=normalized_role,
+                active=bool(active),
+                is_default=bool(is_default),
+                metadata_json=(dict(metadata_json) if isinstance(metadata_json, dict) else metadata_json),
+                created_at=current,
+                updated_at=current,
+            )
+            self.session.add(member)
+            self.session.flush()
+            return member
+
+        member.role = normalized_role
+        member.active = bool(active)
+        member.is_default = bool(is_default)
+        if metadata_json is not None:
+            member.metadata_json = dict(metadata_json) if isinstance(metadata_json, dict) else metadata_json
+        member.updated_at = current
+        self.session.flush()
+        return member
+
+    def deactivate_tenant_member(
+        self,
+        *,
+        tenant_id: str,
+        username: str,
+        now: Optional[datetime] = None,
+    ) -> TenantMember:
+        normalized_tenant_id = str(tenant_id or "").strip()
+        normalized_username = str(username or "").strip()
+        if not normalized_tenant_id:
+            raise BillingStateError("tenant_id is required")
+        if not normalized_username:
+            raise BillingStateError("username is required")
+        member = self.get_tenant_member(
+            tenant_id=normalized_tenant_id,
+            username=normalized_username,
+            include_inactive=True,
+        )
+        if member is None:
+            raise BillingStateError("tenant membership not found")
+        member.active = False
+        member.is_default = False
+        member.updated_at = _as_utc_aware(now) if now else datetime.now(timezone.utc)
+        self.session.flush()
+        return member
+
+    def get_tenant_setting(self, *, tenant_id: str, key: str) -> Optional[TenantSetting]:
+        normalized_tenant_id = str(tenant_id or "").strip()
+        normalized_key = str(key or "").strip().lower()
+        if not normalized_tenant_id or not normalized_key:
+            return None
+        return self.session.scalar(
+            select(TenantSetting).where(
+                TenantSetting.tenant_id == normalized_tenant_id,
+                TenantSetting.key == normalized_key,
+            )
+        )
+
+    def upsert_tenant_setting(
+        self,
+        *,
+        tenant_id: str,
+        key: str,
+        value_json: Any = None,
+        metadata_json: Optional[dict[str, Any]] = None,
+        now: Optional[datetime] = None,
+    ) -> TenantSetting:
+        normalized_tenant_id = str(tenant_id or "").strip()
+        normalized_key = str(key or "").strip().lower()
+        if not normalized_tenant_id:
+            raise BillingStateError("tenant_id is required")
+        if not normalized_key:
+            raise BillingStateError("tenant setting key is required")
+        if self.get_tenant_by_id(normalized_tenant_id) is None:
+            raise BillingStateError(f"tenant not found: {normalized_tenant_id}")
+
+        current = _as_utc_aware(now) if now else datetime.now(timezone.utc)
+        setting = self.get_tenant_setting(tenant_id=normalized_tenant_id, key=normalized_key)
+        if setting is None:
+            setting = TenantSetting(
+                tenant_id=normalized_tenant_id,
+                key=normalized_key,
+                value_json=value_json,
+                metadata_json=(dict(metadata_json) if isinstance(metadata_json, dict) else metadata_json),
+                created_at=current,
+                updated_at=current,
+            )
+            self.session.add(setting)
+            self.session.flush()
+            return setting
+
+        setting.value_json = value_json
+        if metadata_json is not None:
+            setting.metadata_json = dict(metadata_json) if isinstance(metadata_json, dict) else metadata_json
+        setting.updated_at = current
+        self.session.flush()
+        return setting
 
     def get_auth_user(self, username: str) -> Optional[AuthUser]:
         key = str(username or "").strip()
