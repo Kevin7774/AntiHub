@@ -43,6 +43,43 @@ services:
     networks:
       - antihub_internal
 
+  celery_worker:
+    image: antihub/api:prod
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    environment:
+      APP_ENV: production
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://antihub:change_me@db:5432/antihub}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_DISABLED: "false"
+      CASE_STORE_BACKEND: ${CASE_STORE_BACKEND:-database}
+      CASE_STORE_DATABASE_URL: ${CASE_STORE_DATABASE_URL:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - ./.antihub:/app/.antihub
+      - ./logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      celery -A worker:celery_app worker
+      --loglevel=info
+      --concurrency=${CELERY_CONCURRENCY:-2}
+      --max-tasks-per-child=${CELERY_MAX_TASKS:-50}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A worker:celery_app inspect ping --timeout 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - antihub_internal
+
   frontend:
     build:
       context: .

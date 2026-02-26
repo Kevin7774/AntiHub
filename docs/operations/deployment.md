@@ -2,10 +2,15 @@
 
 ## 本地/WSL 部署（推荐）
 ```bash
-./dev.sh up
+# 启动后台依赖（Redis + Openclaw）
+./scripts/dev_services.sh up
+
+# 启动 API（另一个终端）
+source .venv/bin/activate
+uvicorn main:app --host 127.0.0.1 --port 8010 --reload
 ```
 - 默认端口：`8010`
-- 日志文件：`.devlogs/api.log` 与 `.devlogs/worker.log`
+- 停止后台服务：`./scripts/dev_services.sh down`
 
 ## 环境变量（常用）
 - `REDIS_URL`：Redis 地址
