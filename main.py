@@ -506,10 +506,9 @@ PUBLIC_AUTH_PATHS = {
     "/auth/register",
     "/billing/webhooks/payment",
     "/billing/webhooks/wechatpay",
-    "/docs",
-    "/redoc",
-    "/openapi.json",
 }
+
+_IS_PRODUCTION = str(APP_ENV or "").strip().lower() in {"prod", "production"}
 
 BILLING_RATE_LIMITER = BillingRateLimiter()
 
@@ -539,14 +538,19 @@ def _normalize_request_path(path: str) -> str:
 
 
 def _is_public_path(path: str) -> bool:
-    path = _normalize_request_path(path)
-    # ✅ auth endpoints must be public
-    if path in {"/login", "/register", "/openapi.json", "/docs", "/redoc"}:
-        return True
     normalized = _normalize_request_path(path)
+    # Auth endpoints are always public
+    if normalized in {"/login", "/register"}:
+        return True
     if normalized in PUBLIC_AUTH_PATHS:
         return True
-    return normalized.startswith("/docs/") or normalized.startswith("/redoc/")
+    # Swagger / OpenAPI docs: public in dev, gated in production
+    if not _IS_PRODUCTION:
+        if normalized in {"/docs", "/redoc", "/openapi.json"}:
+            return True
+        if normalized.startswith("/docs/") or normalized.startswith("/redoc/"):
+            return True
+    return False
 
 
 def _should_rate_limit_recommendation(request: Request) -> bool:

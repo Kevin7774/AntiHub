@@ -76,6 +76,11 @@ docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build --pull $BUILD_SER
 log "start postgres and redis"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d db redis
 
+log "pre-migration database backup"
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm api \
+  python scripts/backup_restore.py backup --output-dir /app/backups \
+  || log "WARNING: pre-migration backup failed (continuing anyway)"
+
 log "run database migration/init"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm api sh -lc "$MIGRATION_CMD"
 

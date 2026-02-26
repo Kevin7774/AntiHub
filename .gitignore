@@ -10,9 +10,10 @@ __pycache__/
 venv/
 venv-local/
 
-# Logs / temp
+# Logs / temp / backups
 logs/
 *.log
+*.bak*
 
 # OS / Editor
 .DS_Store

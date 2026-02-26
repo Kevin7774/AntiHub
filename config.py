@@ -296,14 +296,21 @@ DOCKER_BUILDKIT_DEFAULT = str(_get("DOCKER_BUILDKIT_DEFAULT", "true")).lower() i
 GIT_ENABLE_SUBMODULES = str(_get("GIT_ENABLE_SUBMODULES", "false")).lower() in {"1", "true", "yes"}
 GIT_ENABLE_LFS = str(_get("GIT_ENABLE_LFS", "false")).lower() in {"1", "true", "yes"}
 
+_CORS_LOCALHOST_DEFAULT = "http://127.0.0.1:5173,http://localhost:5173"
+
+_cors_raw = str(_get("CORS_ORIGINS", "")).strip()
+if not _cors_raw:
+    if str(APP_ENV or "").strip().lower() in {"prod", "production"}:
+        raise RuntimeError(
+            "CORS_ORIGINS must be set explicitly in production "
+            "(e.g. CORS_ORIGINS=https://zenplat.top). "
+            "Refusing to start with localhost defaults."
+        )
+    _cors_raw = _CORS_LOCALHOST_DEFAULT
+
 CORS_ORIGINS = [
     origin.strip()
-    for origin in str(
-        _get(
-            "CORS_ORIGINS",
-            "http://127.0.0.1:5173,http://localhost:5173",
-        )
-    ).split(",")
+    for origin in _cors_raw.split(",")
     if origin.strip()
 ]
 
