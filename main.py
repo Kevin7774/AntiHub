@@ -183,6 +183,10 @@ TENANT_CODE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$"
 TENANT_SETTING_KEY_PATTERN = r"^[a-z][a-z0-9_.:-]{0,63}$"
 ENTITLEMENT_KEY_PATTERN = r"^[a-z][a-z0-9_:.\\-]{1,127}$"
 TENANT_MEMBER_ROLE_VALUES = {"owner", "admin", "member"}
+TENANT_AUDIT_PROVIDER = "tenant"
+TENANT_AUDIT_RAW_PAYLOAD_MAX_CHARS = 4000
+TENANT_AUDIT_DETAIL_MAX_CHARS = 600
+TENANT_AUDIT_VALUE_PREVIEW_MAX_CHARS = 600
 MALICIOUS_XSS_PATTERN = re.compile(r"(?is)<\s*/?\s*script\b|javascript:|on\w+\s*=")
 MALICIOUS_SQLI_PATTERN = re.compile(
     r"(?is)\bunion\b\s+\bselect\b|\bdrop\b\s+\btable\b|\bdelete\b\s+\bfrom\b|\binsert\b\s+\binto\b|\bor\b\s+1\s*=\s*1\b|\band\b\s+1\s*=\s*1\b"
@@ -959,6 +963,105 @@ def _normalize_tenant_setting_key(raw_key: str) -> str:
     if not re.fullmatch(TENANT_SETTING_KEY_PATTERN, normalized):
         raise HTTPException(status_code=422, detail="invalid tenant setting key")
     return normalized
+
+
+def _truncate_audit_text(raw: str, limit: int) -> str:
+    value = str(raw or "")
+    max_limit = max(32, int(limit))
+    if len(value) <= max_limit:
+        return value
+    head = value[: max_limit - 16]
+    return f"{head}...(truncated)"
+
+
+def _audit_value_preview(value: Any, *, limit: int = TENANT_AUDIT_VALUE_PREVIEW_MAX_CHARS) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _truncate_audit_text(value, limit)
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        encoded = str(value)
+    return _truncate_audit_text(encoded, limit)
+
+
+def _tenant_member_audit_snapshot(member: Any | None) -> dict[str, Any] | None:
+    if member is None:
+        return None
+    return {
+        "username": str(getattr(member, "username", "") or ""),
+        "role": str(getattr(member, "role", "") or "member"),
+        "active": bool(getattr(member, "active", True)),
+        "is_default": bool(getattr(member, "is_default", False)),
+        "metadata_preview": _audit_value_preview(getattr(member, "metadata_json", None)),
+    }
+
+
+def _tenant_setting_audit_snapshot(setting: Any | None) -> dict[str, Any] | None:
+    if setting is None:
+        return None
+    return {
+        "key": str(getattr(setting, "key", "") or ""),
+        "value_preview": _audit_value_preview(getattr(setting, "value_json", None)),
+        "metadata_preview": _audit_value_preview(getattr(setting, "metadata_json", None)),
+    }
+
+
+def _write_tenant_audit_log(
+    *,
+    event_type: str,
+    tenant_id: str,
+    actor: AuthIdentity,
+    target: dict[str, Any],
+    before: Any = None,
+    after: Any = None,
+    occurred_at: datetime | None = None,
+) -> None:
+    normalized_event = str(event_type or "").strip()[:64] or "tenant.unknown"
+    normalized_tenant_id = str(tenant_id or "").strip()
+    payload = {
+        "domain": "tenant",
+        "tenant_id": normalized_tenant_id,
+        "actor": {
+            "username": str(getattr(actor, "username", "") or ""),
+            "role": _normalize_role_value(str(getattr(actor, "role", "user") or "user")),
+        },
+        "target": target,
+        "before": before,
+        "after": after,
+    }
+    raw_payload = _truncate_audit_text(
+        json.dumps(payload, ensure_ascii=False, default=str),
+        TENANT_AUDIT_RAW_PAYLOAD_MAX_CHARS,
+    )
+    detail = _truncate_audit_text(
+        f"tenant_id={normalized_tenant_id};actor={payload['actor']['username']};event={normalized_event}",
+        TENANT_AUDIT_DETAIL_MAX_CHARS,
+    )
+    try:
+        with session_scope() as session:
+            repo = BillingRepository(session)
+            repo.record_audit_log(
+                provider=TENANT_AUDIT_PROVIDER,
+                event_type=normalized_event,
+                raw_payload=raw_payload,
+                signature=None,
+                signature_valid=True,
+                outcome="ok",
+                detail=detail,
+                occurred_at=occurred_at,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log_event(
+            APP_LOGGER,
+            logging.WARNING,
+            "tenant.audit.write_failed",
+            event_type=normalized_event,
+            tenant_id=normalized_tenant_id,
+            actor=str(getattr(actor, "username", "") or ""),
+            error=str(exc)[:240],
+        )
 
 
 async def authenticate_websocket(websocket: WebSocket) -> AuthIdentity:
@@ -3044,6 +3147,9 @@ async def upsert_tenant_member(
     normalized_username = _require_safe_input("username", str(username or "")).strip()
     if not normalized_username:
         raise HTTPException(status_code=400, detail="username is required")
+    occurred_at = datetime.now(timezone.utc)
+    before_snapshot: dict[str, Any] | None = None
+    after_snapshot: dict[str, Any] | None = None
     with session_scope() as session:
         repo = BillingRepository(session)
         if repo.get_tenant_by_id(tenant_id) is None:
@@ -3058,6 +3164,12 @@ async def upsert_tenant_member(
             target_user=target_user,
             intended_member_role=payload.role,
         )
+        before_member = repo.get_tenant_member(
+            tenant_id=tenant_id,
+            username=normalized_username,
+            include_inactive=True,
+        )
+        before_snapshot = _tenant_member_audit_snapshot(before_member)
         try:
             member = repo.upsert_tenant_member(
                 tenant_id=tenant_id,
@@ -3069,7 +3181,18 @@ async def upsert_tenant_member(
             )
         except BillingStateError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return _to_tenant_member_response(member)
+        after_snapshot = _tenant_member_audit_snapshot(member)
+        response = _to_tenant_member_response(member)
+    _write_tenant_audit_log(
+        event_type="tenant.membership.upsert",
+        tenant_id=tenant_id,
+        actor=identity,
+        target={"kind": "membership", "username": normalized_username},
+        before=before_snapshot,
+        after=after_snapshot,
+        occurred_at=occurred_at,
+    )
+    return response
 
 
 @app.delete("/admin/tenants/{tenant_id}/members/{username}", response_model=TenantMemberInfo)
@@ -3082,6 +3205,9 @@ async def deactivate_tenant_member(
     normalized_username = _require_safe_input("username", str(username or "")).strip()
     if not normalized_username:
         raise HTTPException(status_code=400, detail="username is required")
+    occurred_at = datetime.now(timezone.utc)
+    before_snapshot: dict[str, Any] | None = None
+    after_snapshot: dict[str, Any] | None = None
     with session_scope() as session:
         repo = BillingRepository(session)
         if repo.get_tenant_by_id(tenant_id) is None:
@@ -3095,6 +3221,12 @@ async def deactivate_tenant_member(
             tenant_id,
             target_user=target_user,
         )
+        before_member = repo.get_tenant_member(
+            tenant_id=tenant_id,
+            username=normalized_username,
+            include_inactive=True,
+        )
+        before_snapshot = _tenant_member_audit_snapshot(before_member)
         try:
             member = repo.deactivate_tenant_member(
                 tenant_id=tenant_id,
@@ -3105,7 +3237,18 @@ async def deactivate_tenant_member(
             if "not found" in detail.lower():
                 raise HTTPException(status_code=404, detail=detail) from exc
             raise HTTPException(status_code=409, detail=detail) from exc
-        return _to_tenant_member_response(member)
+        after_snapshot = _tenant_member_audit_snapshot(member)
+        response = _to_tenant_member_response(member)
+    _write_tenant_audit_log(
+        event_type="tenant.membership.deactivate",
+        tenant_id=tenant_id,
+        actor=identity,
+        target={"kind": "membership", "username": normalized_username},
+        before=before_snapshot,
+        after=after_snapshot,
+        occurred_at=occurred_at,
+    )
+    return response
 
 
 @app.get("/admin/tenants/{tenant_id}/settings/{key}", response_model=TenantSettingInfo)
@@ -3135,10 +3278,15 @@ async def upsert_tenant_setting(
     identity: AuthIdentity = Depends(require_tenant_foundation_root),
 ) -> TenantSettingInfo:
     normalized_key = _normalize_tenant_setting_key(key)
+    occurred_at = datetime.now(timezone.utc)
+    before_snapshot: dict[str, Any] | None = None
+    after_snapshot: dict[str, Any] | None = None
     with session_scope() as session:
         repo = BillingRepository(session)
         if repo.get_tenant_by_id(tenant_id) is None:
             raise HTTPException(status_code=404, detail="tenant not found")
+        before_setting = repo.get_tenant_setting(tenant_id=tenant_id, key=normalized_key)
+        before_snapshot = _tenant_setting_audit_snapshot(before_setting)
         try:
             setting = repo.upsert_tenant_setting(
                 tenant_id=tenant_id,
@@ -3148,7 +3296,18 @@ async def upsert_tenant_setting(
             )
         except BillingStateError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return _to_tenant_setting_response(setting)
+        after_snapshot = _tenant_setting_audit_snapshot(setting)
+        response = _to_tenant_setting_response(setting)
+    _write_tenant_audit_log(
+        event_type="tenant.setting.upsert",
+        tenant_id=tenant_id,
+        actor=identity,
+        target={"kind": "setting", "key": normalized_key},
+        before=before_snapshot,
+        after=after_snapshot,
+        occurred_at=occurred_at,
+    )
+    return response
 
 
 @app.get("/admin/users", response_model=List[AuthUserInfo])

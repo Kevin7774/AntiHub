@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -44,6 +45,30 @@ def _apply_auth_test_overrides(monkeypatch, session_factory, engine) -> None:
     monkeypatch.setattr(main, "init_decision_db", lambda: None)
     monkeypatch.setattr(main, "seed_default_catalog", lambda: None)
     monkeypatch.setattr(main, "STARTUP_BOOTSTRAP_ENABLED", False)
+
+
+def _tenant_audit_events(session_factory, *, event_type: str) -> list[dict[str, object]]:
+    with billing_session_scope(session_factory) as session:
+        repo = main.BillingRepository(session)
+        rows = repo.list_audit_logs(limit=200, offset=0, provider="tenant")
+        items: list[dict[str, object]] = []
+        for row in rows:
+            if str(getattr(row, "event_type", "") or "") != event_type:
+                continue
+            raw_text = str(getattr(row, "raw_payload", "") or "")
+            try:
+                payload = json.loads(raw_text) if raw_text else {}
+            except Exception:  # noqa: BLE001
+                payload = {}
+            items.append(
+                {
+                    "event_type": str(getattr(row, "event_type", "") or ""),
+                    "provider": str(getattr(row, "provider", "") or ""),
+                    "outcome": str(getattr(row, "outcome", "") or ""),
+                    "payload": payload,
+                }
+            )
+        return items
 
 
 def test_root_can_manage_membership_across_tenants(monkeypatch, tmp_path: Path) -> None:
@@ -111,6 +136,43 @@ def test_root_can_manage_membership_across_tenants(monkeypatch, tmp_path: Path) 
         )
         assert deactivated.status_code == 200, deactivated.text
         assert deactivated.json().get("active") is False
+
+        setting_upsert = client.put(
+            f"/admin/tenants/{tenant_a_id}/settings/feature.deep_search",
+            headers=_auth_header(root_token),
+            json={"value": {"enabled": True, "rpm": 120}, "metadata": {"source": "ops"}},
+        )
+        assert setting_upsert.status_code == 200, setting_upsert.text
+
+    upsert_events = _tenant_audit_events(session_factory, event_type="tenant.membership.upsert")
+    assert any(
+        str(item.get("provider") or "") == "tenant"
+        and str(item.get("outcome") or "") == "ok"
+        and str(((item.get("payload") or {}).get("tenant_id")) or "") == tenant_a_id
+        and str((((item.get("payload") or {}).get("actor") or {}).get("username")) or "") == "root"
+        and str((((item.get("payload") or {}).get("target") or {}).get("kind")) or "") == "membership"
+        and str((((item.get("payload") or {}).get("target") or {}).get("username")) or "") == "alice"
+        for item in upsert_events
+    )
+
+    deactivate_events = _tenant_audit_events(session_factory, event_type="tenant.membership.deactivate")
+    assert any(
+        str(item.get("provider") or "") == "tenant"
+        and str(item.get("outcome") or "") == "ok"
+        and str(((item.get("payload") or {}).get("tenant_id")) or "") == tenant_a_id
+        and str((((item.get("payload") or {}).get("target") or {}).get("username")) or "") == "alice"
+        for item in deactivate_events
+    )
+
+    setting_events = _tenant_audit_events(session_factory, event_type="tenant.setting.upsert")
+    assert any(
+        str(item.get("provider") or "") == "tenant"
+        and str(item.get("outcome") or "") == "ok"
+        and str(((item.get("payload") or {}).get("tenant_id")) or "") == tenant_a_id
+        and str((((item.get("payload") or {}).get("target") or {}).get("kind")) or "") == "setting"
+        and str((((item.get("payload") or {}).get("target") or {}).get("key")) or "") == "feature.deep_search"
+        for item in setting_events
+    )
 
     engine.dispose()
 
