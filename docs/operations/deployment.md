@@ -1,16 +1,39 @@
 # 部署
 
 ## 本地/WSL 部署（推荐）
+建议顺序：
+1) 先执行本地基线检查
+2) 再启动后台依赖和 API
+
+```bash
+bash scripts/local_baseline_check.sh
+```
+
 ```bash
 # 启动后台依赖（Redis + Openclaw）
 ./scripts/dev_services.sh up
 
 # 启动 API（另一个终端）
 source .venv/bin/activate
-uvicorn main:app --host 127.0.0.1 --port 8010 --reload
+.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8010 --reload
 ```
 - 默认端口：`8010`
 - 停止后台服务：`./scripts/dev_services.sh down`
+
+## WSL Docker Integration 排查
+如果命令失败：
+```bash
+docker compose version
+```
+且提示 `docker could not be found in this WSL 2 distro`，应归类为本地环境问题（非业务逻辑回归）。
+
+最小处理步骤：
+1) 打开 Docker Desktop -> Settings -> Resources -> WSL Integration
+2) 勾选当前 WSL 发行版
+3) 重开 WSL 终端后重试：
+```bash
+docker compose version
+```
 
 ## 环境变量（常用）
 - `REDIS_URL`：Redis 地址
