@@ -14,6 +14,7 @@
 
 ## 运维与可观测
 - 部署：`./operations/deployment.md`
+- Auth/Admin 矩阵：`./operations/auth_admin_matrix.md`
 - Docker Desktop 代理：`./operations/docker-desktop-proxy.md`
 - 可观测性：`./operations/observability.md`
 - 维护：`./operations/maintenance.md`
