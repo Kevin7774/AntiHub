@@ -814,6 +814,11 @@ def require_tenant_foundation_root(identity: AuthIdentity = Depends(require_root
     return identity
 
 
+def require_tenant_foundation_admin(identity: AuthIdentity = Depends(require_admin)) -> AuthIdentity:
+    _ensure_feature_enabled(FEATURE_MULTI_TENANT_FOUNDATION)
+    return identity
+
+
 def _ensure_feature_enabled(enabled: bool) -> None:
     if not enabled:
         raise HTTPException(status_code=404, detail="feature disabled")
@@ -887,6 +892,54 @@ def _enforce_user_management_scope(
         next_tenant = str(intended_tenant_id or "").strip() or None
         if next_tenant and str(next_tenant) != str(actor_tenant_id):
             raise HTTPException(status_code=403, detail="admin cannot move user to another tenant")
+
+
+def _identity_primary_tenant_id(repo: BillingRepository, identity: AuthIdentity) -> str | None:
+    user = repo.get_auth_user(identity.username)
+    if user is None:
+        return None
+    return str(getattr(user, "tenant_id", "") or "").strip() or None
+
+
+def _enforce_tenant_membership_management_scope(
+    repo: BillingRepository,
+    identity: AuthIdentity,
+    tenant_id: str,
+    *,
+    target_user: Any | None = None,
+    intended_member_role: str | None = None,
+) -> None:
+    target = str(tenant_id or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="tenant_id is required")
+    if _is_root_role(identity):
+        return
+    if not _is_admin_role(identity):
+        raise HTTPException(status_code=403, detail="admin role required")
+
+    actor_tenant_id = _identity_primary_tenant_id(repo, identity)
+    if not actor_tenant_id:
+        raise HTTPException(status_code=403, detail="tenant scoped access denied")
+    if str(actor_tenant_id) != target:
+        raise HTTPException(status_code=403, detail="cross-tenant access denied")
+
+    if intended_member_role is not None:
+        next_member_role = str(intended_member_role or "").strip().lower() or "member"
+        if next_member_role != "member":
+            raise HTTPException(status_code=403, detail="admin can only assign member membership role")
+
+    if target_user is None:
+        return
+
+    target_role = _normalize_role_value(str(getattr(target_user, "role", "user")))
+    if target_role == "root":
+        raise HTTPException(status_code=403, detail="admin cannot manage root user membership")
+    if target_role == "admin" and str(getattr(target_user, "username", "")) != identity.username:
+        raise HTTPException(status_code=403, detail="cannot manage peer admin user")
+
+    target_tenant_id = str(getattr(target_user, "tenant_id", "") or "").strip() or None
+    if not target_tenant_id or str(target_tenant_id) != target:
+        raise HTTPException(status_code=403, detail="cross-tenant user management denied")
 
 
 def _tenant_usernames(repo: BillingRepository, tenant_id: str) -> set[str]:
@@ -2964,10 +3017,11 @@ async def list_tenant_members(
     include_inactive: bool = Query(False),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    identity: AuthIdentity = Depends(require_tenant_foundation_root),
+    identity: AuthIdentity = Depends(require_tenant_foundation_admin),
 ) -> List[TenantMemberInfo]:
     with session_scope() as session:
         repo = BillingRepository(session)
+        _enforce_tenant_membership_management_scope(repo, identity, tenant_id)
         if repo.get_tenant_by_id(tenant_id) is None:
             raise HTTPException(status_code=404, detail="tenant not found")
         members = repo.list_tenant_members(
@@ -2985,7 +3039,7 @@ async def upsert_tenant_member(
     tenant_id: str,
     username: str,
     payload: TenantMemberUpsertRequest,
-    identity: AuthIdentity = Depends(require_tenant_foundation_root),
+    identity: AuthIdentity = Depends(require_tenant_foundation_admin),
 ) -> TenantMemberInfo:
     normalized_username = _require_safe_input("username", str(username or "")).strip()
     if not normalized_username:
@@ -2994,8 +3048,16 @@ async def upsert_tenant_member(
         repo = BillingRepository(session)
         if repo.get_tenant_by_id(tenant_id) is None:
             raise HTTPException(status_code=404, detail="tenant not found")
-        if repo.get_auth_user(normalized_username) is None:
+        target_user = repo.get_auth_user(normalized_username)
+        if target_user is None:
             raise HTTPException(status_code=404, detail="user not found")
+        _enforce_tenant_membership_management_scope(
+            repo,
+            identity,
+            tenant_id,
+            target_user=target_user,
+            intended_member_role=payload.role,
+        )
         try:
             member = repo.upsert_tenant_member(
                 tenant_id=tenant_id,
@@ -3015,7 +3077,7 @@ async def upsert_tenant_member(
 async def deactivate_tenant_member(
     tenant_id: str,
     username: str,
-    identity: AuthIdentity = Depends(require_tenant_foundation_root),
+    identity: AuthIdentity = Depends(require_tenant_foundation_admin),
 ) -> TenantMemberInfo:
     normalized_username = _require_safe_input("username", str(username or "")).strip()
     if not normalized_username:
@@ -3024,6 +3086,15 @@ async def deactivate_tenant_member(
         repo = BillingRepository(session)
         if repo.get_tenant_by_id(tenant_id) is None:
             raise HTTPException(status_code=404, detail="tenant not found")
+        target_user = repo.get_auth_user(normalized_username)
+        if target_user is None:
+            raise HTTPException(status_code=404, detail="user not found")
+        _enforce_tenant_membership_management_scope(
+            repo,
+            identity,
+            tenant_id,
+            target_user=target_user,
+        )
         try:
             member = repo.deactivate_tenant_member(
                 tenant_id=tenant_id,
