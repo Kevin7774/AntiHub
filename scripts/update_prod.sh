@@ -80,7 +80,7 @@ log "run database migration/init"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm api sh -lc "$MIGRATION_CMD"
 
 log "restart application services"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d api frontend tunnel
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d api celery_worker frontend tunnel
 
 log "service status"
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps

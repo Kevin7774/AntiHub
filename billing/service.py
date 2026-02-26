@@ -19,6 +19,7 @@ class PaymentWebhookError(RuntimeError):
 
 EVENT_TYPE_PAYMENT_SUCCEEDED: Final[str] = "payment.succeeded"
 TIMEOUT_EVENT_TYPES: Final[frozenset[str]] = frozenset({"payment.timeout", "payment.timed_out", "order.timeout"})
+FAILURE_EVENT_TYPES: Final[frozenset[str]] = frozenset({"payment.failed", "payment.failure"})
 REFUND_EVENT_TYPES: Final[frozenset[str]] = frozenset({"payment.refunded", "payment.refund"})
 
 POINTS_GRANT_IDEMPOTENCY_PREFIX: Final[str] = "points-grant:order:"
@@ -130,6 +131,8 @@ def process_payment_webhook(
     )
     if event_type in TIMEOUT_EVENT_TYPES:
         return _process_timeout(repo, event)
+    if event_type in FAILURE_EVENT_TYPES:
+        return _process_failure(repo, event)
     if event_type in REFUND_EVENT_TYPES:
         return _process_refund(repo, event)
     if event_type != EVENT_TYPE_PAYMENT_SUCCEEDED:
@@ -267,6 +270,31 @@ def _process_timeout(repo: BillingRepository, event: dict[str, Any]) -> dict[str
     except BillingStateError as exc:
         raise PaymentWebhookError(str(exc)) from exc
     return {"status": "timeout_closed", "event_id": event_id, "order_id": order.id}
+
+
+def _process_failure(repo: BillingRepository, event: dict[str, Any]) -> dict[str, Any]:
+    event_id = _extract_event_id(event)
+    if not event_id:
+        raise PaymentWebhookError("event_id is required")
+    data = _extract_data(event)
+
+    external_order_id = str(data.get("external_order_id") or data.get("order_id") or "").strip()
+    if not external_order_id:
+        raise PaymentWebhookError("external_order_id is required for failure")
+
+    order = repo.get_order_by_external_order_id(external_order_id)
+    if not order:
+        raise PaymentWebhookError(f"order not found: {external_order_id}")
+
+    if order.status == OrderStatus.PAID:
+        return {"status": "ignored", "reason": "order already paid", "event_id": event_id, "order_id": order.id}
+    if order.status == OrderStatus.FAILED:
+        return {"status": "failed", "reason": "already failed", "event_id": event_id, "order_id": order.id}
+    try:
+        repo.mark_order_failed(order.id, now=dt.datetime.now(dt.timezone.utc), provider_payload=json.dumps(event, ensure_ascii=False))
+    except BillingStateError as exc:
+        raise PaymentWebhookError(str(exc)) from exc
+    return {"status": "failed", "event_id": event_id, "order_id": order.id}
 
 
 def _process_refund(repo: BillingRepository, event: dict[str, Any]) -> dict[str, Any]:

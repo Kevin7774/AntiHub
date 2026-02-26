@@ -738,6 +738,33 @@ class BillingRepository:
         self.session.flush()
         return order
 
+    def mark_order_failed(
+        self,
+        order_id: str,
+        *,
+        now: Optional[datetime] = None,
+        provider_payload: Optional[str] = None,
+    ) -> Order:
+        order = self.session.get(Order, order_id)
+        if not order:
+            raise BillingStateError(f"order not found: {order_id}")
+        if order.status == OrderStatus.FAILED:
+            return order
+        if order.status != OrderStatus.PENDING:
+            raise BillingStateError(f"order {order_id} cannot be marked failed from status={order.status}")
+
+        current = _as_utc_aware(now) if now else datetime.now(timezone.utc)
+        order.status = OrderStatus.FAILED
+        order.updated_at = current
+        if provider_payload is not None:
+            try:
+                parsed = json.loads(str(provider_payload or ""))
+            except Exception:
+                parsed = str(provider_payload or "")
+            order.provider_payload = _merge_provider_payload(order.provider_payload, {"webhook": parsed})
+        self.session.flush()
+        return order
+
     def mark_order_refunded(
         self,
         order_id: str,

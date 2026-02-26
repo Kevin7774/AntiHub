@@ -19,9 +19,11 @@ logs/
 .vscode/
 .idea/
 
-# Env secrets
+# Env secrets (NEVER commit real credentials)
 .env
 .env.local
+.env.prod
+.env.prod.bak*
 
 # Node
 node_modules/
@@ -39,3 +41,6 @@ playwright-report/
 
 # Local databases / binaries (如果不需要版本管理)
 *.db
+
+# PostgreSQL / Redis data volumes
+data/
