@@ -1,12 +1,12 @@
 # AntiHub
 
-## 开发与测试
+## 开发与测试（WSL 推荐）
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest -q
+.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+.venv/bin/python -m pytest -q
 ```
 
 或使用一键脚本：
@@ -14,6 +14,26 @@ python -m pytest -q
 ```bash
 ./scripts/test.sh
 ```
+
+## 本地环境基线检查
+
+```bash
+bash scripts/local_baseline_check.sh
+```
+
+说明：
+- 脚本会输出 `OK/WARN/FAIL` 及最小修复命令。
+- 仅 `FAIL` 会返回非 0 退出码。
+
+## 本地环境变量（开发）
+
+```bash
+cp .env.local.example .env.local
+```
+
+说明：
+- `.env.local.example` 仅用于本地开发。
+- 不要把真实生产密钥写入 `.env.local`。
 
 ## 本地启动（开发模式）
 
@@ -23,7 +43,7 @@ python -m pytest -q
 
 # 2. 启动 API（另一个终端）
 source .venv/bin/activate
-uvicorn main:app --host 127.0.0.1 --port 8010 --reload
+.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8010 --reload
 ```
 
 停止后台服务：

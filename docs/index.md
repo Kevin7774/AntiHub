@@ -4,6 +4,7 @@
 
 ## 快速开始
 - `./getting-started.md`
+- 本地基线检查（WSL）：见 `./getting-started.md` 的“WSL 最小检查清单”
 
 ## 用户指南
 - 控制台使用：`./user-guide/console.md`
