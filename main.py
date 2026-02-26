@@ -1582,7 +1582,7 @@ class BillingPlanCreateRequest(BaseModel):
     code: str = Field(..., min_length=1, max_length=64, pattern=PLAN_CODE_PATTERN)
     name: str = Field(..., min_length=1, max_length=120)
     description: Optional[str] = Field(default=None, max_length=2000)
-    currency: str = Field(default="usd", min_length=3, max_length=3, pattern=CURRENCY_PATTERN)
+    currency: str = Field(default="cny", min_length=3, max_length=3, pattern=CURRENCY_PATTERN)
     price_cents: int = Field(0, ge=0, le=100_000_000_00)
     monthly_points: int = Field(0, ge=0, le=100_000_000)
     billing_cycle: str = Field(default="monthly", min_length=1, max_length=16)

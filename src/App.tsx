@@ -1086,17 +1086,17 @@ function planTierPeriod(tier: BillingPlanTier): string {
 }
 
 function planTierFeatures(tier: BillingPlanTier, points: number): string[] {
-  const pointsText = `${formatNumber(points)} 积分/月`;
+  const pointsText = `购买即获 ${formatNumber(points)} 积分`;
   if (tier === "monthly") {
-    return ["扫码支付，秒级开通", `每月发放 ${pointsText}`, "支持随时续费升级"];
+    return ["扫码支付，秒级开通", pointsText, "支持随时续费升级"];
   }
   if (tier === "quarterly") {
-    return ["季度方案更省心", `每月发放 ${pointsText}`, "适合持续运营场景"];
+    return ["季度方案更省心", pointsText, "适合持续运营场景"];
   }
   if (tier === "yearly") {
-    return ["年度投入，综合成本更低", `每月发放 ${pointsText}`, "推荐给长期项目与团队"];
+    return ["年度投入，综合成本更低", pointsText, "推荐给长期项目与团队"];
   }
-  return [`每月发放 ${pointsText}`, "支付成功后自动激活", "支持扫码支付"];
+  return [pointsText, "支付成功后自动激活", "支持扫码支付"];
 }
 
 function hasAdminAccess(role: string): boolean {
@@ -1315,9 +1315,9 @@ function TenantWorkspacePage({
             <span className="kv-key">订阅</span>
             <span className="kv-value">
               {snapshot?.subscription.status === "active" ? (
-                <span className="pill pill-success">Active</span>
+                <span className="pill pill-success">生效中</span>
               ) : (
-                <span className="pill pill-muted">{snapshot?.subscription.status || "none"}</span>
+                <span className="pill pill-muted">未订阅</span>
               )}
             </span>
           </div>
@@ -1457,7 +1457,8 @@ function BillingPage({
     planCode: string;
     checkoutUrl: string;
     externalOrderId: string;
-  }>({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "" });
+    amountText: string;
+  }>({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "", amountText: "" });
 
   const loadPlans = useCallback(async () => {
     const response = await apiFetch("/billing/plans");
@@ -1527,6 +1528,7 @@ function BillingPage({
           planCode: plan.code,
           checkoutUrl: url,
           externalOrderId,
+          amountText: compactPlanPrice(plan.price_cents, plan.currency),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1598,12 +1600,12 @@ function BillingPage({
             <div className="kv-row">
               <span className="kv-key">订阅</span>
               <span className="kv-value">
-                {active ? <span className="pill pill-success">Active</span> : <span className="pill pill-muted">None</span>}
+                {active ? <span className="pill pill-success">生效中</span> : <span className="pill pill-muted">未订阅</span>}
               </span>
             </div>
             <div className="kv-row">
               <span className="kv-key">套餐</span>
-              <span className="kv-value mono">{activePlanCode || "-"}</span>
+              <span className="kv-value mono">{subscription?.plan_name || activePlanCode || "-"}</span>
             </div>
             <div className="kv-row">
               <span className="kv-key">到期</span>
@@ -1614,7 +1616,7 @@ function BillingPage({
             <div className="section-title">积分余额</div>
             <div className="billing-points">
               <div className="billing-points-value">{points ? formatNumber(points.balance) : "-"}</div>
-              <div className="muted">每次订阅成功后按套餐发放积分（按订单幂等）。</div>
+              <div className="muted">支付成功后按套餐一次性发放积分。</div>
             </div>
           </div>
         </div>
@@ -1624,7 +1626,7 @@ function BillingPage({
         <div className="pricing-showcase-head">
           <div>
             <div className="section-title">升级套餐</div>
-            <div className="muted">扫码支付开通会员。当前定价：月 198￥ / 季 398￥ / 年 1980￥。</div>
+            <div className="muted">扫码支付开通会员，支付成功后积分即时到账。</div>
           </div>
         </div>
         {hasAdminAccess(role) ? (
@@ -1693,12 +1695,17 @@ function BillingPage({
         </div>
       </div>
 
+      <div className="muted" style={{ marginTop: "1rem", fontSize: "0.85em" }}>
+        如需帮助，请联系客服：3193773138@qq.com
+      </div>
+
       <PaymentModal
         open={modalState.open}
         planName={modalState.planName}
         planCode={modalState.planCode}
         checkoutUrl={modalState.checkoutUrl}
         externalOrderId={modalState.externalOrderId}
+        amountText={modalState.amountText}
         apiFetch={apiFetch}
         onClose={() => setModalState((prev) => ({ ...prev, open: false }))}
         onPaid={handlePaid}
@@ -1708,12 +1715,23 @@ function BillingPage({
   );
 }
 
+function localizeOrderStatus(raw: string): string {
+  const s = (raw || "").toLowerCase();
+  if (s === "pending") return "等待支付";
+  if (s === "paid") return "已支付";
+  if (s === "failed") return "支付失败";
+  if (s === "canceled") return "已取消";
+  if (s === "refunded") return "已退款";
+  return raw || "未知";
+}
+
 function PaymentModal({
   open,
   planName,
   planCode,
   checkoutUrl,
   externalOrderId,
+  amountText,
   apiFetch,
   onClose,
   onPaid,
@@ -1724,6 +1742,7 @@ function PaymentModal({
   planCode: string;
   checkoutUrl: string;
   externalOrderId: string;
+  amountText?: string;
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   onClose: () => void;
   onPaid: () => void;
@@ -1861,6 +1880,7 @@ function PaymentModal({
             <div className="section-title">微信扫码支付</div>
             <div className="muted">
               套餐 <span className="mono">{planName || planCode || "-"}</span>
+              {amountText ? <> · 应付 <span className="mono">{amountText}</span></> : null}
             </div>
           </div>
           <button className="ghost" type="button" onClick={onClose} disabled={polling && success}>
@@ -1891,7 +1911,7 @@ function PaymentModal({
 
         <div className="modal-actions">
           <div className="muted">
-            {success ? "支付已确认，正在同步…" : polling ? `检测中 · 当前状态 ${status}` : `已暂停检测 · 当前状态 ${status}`}
+            {success ? "支付已确认，正在同步…" : polling ? `检测中 · ${localizeOrderStatus(status)}` : `已暂停检测 · ${localizeOrderStatus(status)}`}
           </div>
           <div className="row-actions">
             <button className="ghost" type="button" onClick={() => void checkNow()} disabled={success}>
@@ -1924,7 +1944,11 @@ function PaymentModal({
             <div className="payment-success-mark">✓</div>
             <div className="payment-success-text">支付成功</div>
           </div>
-        ) : null}
+        ) : (
+          <div className="muted" style={{ marginTop: "0.5rem", fontSize: "0.8em", textAlign: "center" }}>
+            支付遇到问题？请联系客服：3193773138@qq.com
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1955,7 +1979,8 @@ function PointsPaywallModal({
     planCode: string;
     checkoutUrl: string;
     externalOrderId: string;
-  }>({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "" });
+    amountText: string;
+  }>({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "", amountText: "" });
 
   const refresh = useCallback(async () => {
     if (!open || loading) return;
@@ -1983,7 +2008,7 @@ function PointsPaywallModal({
 
   useEffect(() => {
     if (!open) {
-      setPaymentState({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "" });
+      setPaymentState({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "", amountText: "" });
       setCheckoutBusy(null);
       return;
     }
@@ -2025,6 +2050,7 @@ function PointsPaywallModal({
           planCode: plan.code,
           checkoutUrl: url,
           externalOrderId,
+          amountText: compactPlanPrice(plan.price_cents, plan.currency),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -2074,7 +2100,7 @@ function PointsPaywallModal({
                   <div className="plan-head">
                     <div>
                       <div className="plan-title">{plan.name}</div>
-                      <div className="plan-tagline">扫码支付后自动到账积分</div>
+                      <div className="plan-tagline">支付后即时到账</div>
                     </div>
                     <span className="pill pill-muted">{planIntervalLabel(plan.code)}</span>
                   </div>
@@ -2084,7 +2110,7 @@ function PointsPaywallModal({
                   <div className="plan-feature-list">
                     <div className="plan-feature-item">
                       <span className="plan-feature-dot">✦</span>
-                      <span>{formatNumber(plan.monthly_points)} 积分</span>
+                      <span>购买即获 {formatNumber(plan.monthly_points)} 积分</span>
                     </div>
                   </div>
                   <div className="plan-actions">
@@ -2112,6 +2138,7 @@ function PointsPaywallModal({
         planCode={paymentState.planCode}
         checkoutUrl={paymentState.checkoutUrl}
         externalOrderId={paymentState.externalOrderId}
+        amountText={paymentState.amountText}
         apiFetch={apiFetch}
         onClose={() => setPaymentState((prev) => ({ ...prev, open: false }))}
         onPaid={handlePaid}
