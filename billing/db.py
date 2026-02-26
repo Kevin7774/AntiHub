@@ -77,7 +77,12 @@ def init_billing_db(engine: Engine | None = None) -> None:
         return
     if _is_production_env() and not _is_postgres_url(DATABASE_URL):
         raise RuntimeError("DATABASE_URL must be PostgreSQL in production")
-    _run_alembic_upgrade("head")
+    try:
+        _run_alembic_upgrade("head")
+    except Exception:
+        if _is_production_env():
+            raise
+        Base.metadata.create_all(bind=ENGINE)
 
 
 @contextmanager

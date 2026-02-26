@@ -18,6 +18,7 @@ if str(ROOT_DIR) not in sys.path:
 from auth import hash_password_bcrypt
 from billing import BillingRepository, session_scope
 from billing.models import Base as BillingBase
+from billing.seed import seed_default_plans
 from config import DATABASE_URL
 from decision.models import DecisionBase
 from decision.service import seed_default_catalog
@@ -62,9 +63,47 @@ def _fallback_create_all(database_url: str) -> None:
     try:
         BillingBase.metadata.create_all(bind=engine)
         DecisionBase.metadata.create_all(bind=engine)
+        _fallback_reconcile_billing_schema(engine)
         print("[init-prod-db] fallback create_all completed")
     finally:
         engine.dispose()
+
+
+def _fallback_reconcile_billing_schema(engine) -> None:
+    """
+    Best-effort schema reconciliation for environments that skip Alembic.
+
+    The fallback path should not block startup; SQL failures are logged and ignored.
+    """
+
+    statements = [
+        "ALTER TABLE billing_plans ADD COLUMN IF NOT EXISTS billing_cycle VARCHAR(16)",
+        "ALTER TABLE billing_plans ADD COLUMN IF NOT EXISTS trial_days INTEGER",
+        "ALTER TABLE billing_plans ADD COLUMN IF NOT EXISTS metadata JSONB",
+        (
+            "CREATE TABLE IF NOT EXISTS billing_plan_entitlements ("
+            "id VARCHAR(36) PRIMARY KEY, "
+            "plan_id VARCHAR(36) NOT NULL REFERENCES billing_plans(id), "
+            "key VARCHAR(128) NOT NULL, "
+            "enabled BOOLEAN NOT NULL DEFAULT TRUE, "
+            "value JSONB NULL, "
+            "limit_value INTEGER NULL, "
+            "metadata JSONB NULL, "
+            "created_at TIMESTAMPTZ NOT NULL, "
+            "updated_at TIMESTAMPTZ NOT NULL"
+            ")"
+        ),
+        "CREATE INDEX IF NOT EXISTS ix_billing_plan_entitlements_plan_id ON billing_plan_entitlements(plan_id)",
+        "CREATE INDEX IF NOT EXISTS ix_billing_plan_entitlements_key ON billing_plan_entitlements(key)",
+        "CREATE INDEX IF NOT EXISTS ix_billing_plan_entitlements_enabled ON billing_plan_entitlements(enabled)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_billing_plan_entitlements_plan_key ON billing_plan_entitlements(plan_id, key)",
+    ]
+    with engine.begin() as conn:
+        for sql in statements:
+            try:
+                conn.execute(text(sql))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[init-prod-db] fallback reconcile skipped: {exc}")
 
 
 def _bootstrap_admin_user() -> None:
@@ -129,6 +168,17 @@ def main() -> int:
 
     _bootstrap_root_user()
     _bootstrap_admin_user()
+    try:
+        result = seed_default_plans()
+        print(
+            "[init-prod-db] billing plans ensured: "
+            f"plans_created={result['plans_created']} "
+            f"plans_updated={result['plans_updated']} "
+            f"entitlements_created={result['entitlements_created']} "
+            f"entitlements_updated={result['entitlements_updated']}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[init-prod-db] billing seed skipped: {exc}")
     seed_default_catalog()
     print("[init-prod-db] default catalog ensured")
     print("[init-prod-db] initialization completed")

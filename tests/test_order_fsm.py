@@ -102,7 +102,7 @@ def test_refund_rolls_back_points_and_is_idempotent() -> None:
     engine.dispose()
 
 
-def test_upgrade_resets_expiry_and_grants_delta_points() -> None:
+def test_upgrade_resets_expiry_and_grants_full_points() -> None:
     engine, session_factory = make_db()
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -140,7 +140,7 @@ def test_upgrade_resets_expiry_and_grants_delta_points() -> None:
         assert subscription.expires_at.date() == (now + timedelta(days=30)).date()
         assert repo.get_user_point_balance("alice") == 1000
 
-        # Upgrade while still active: reset expiry and grant delta points only.
+        # Upgrade while still active: reset expiry and grant full plan credits.
         upgrade_time = now + timedelta(days=10)
         order_pro = repo.create_order(
             user_id="alice",
@@ -165,13 +165,87 @@ def test_upgrade_resets_expiry_and_grants_delta_points() -> None:
         second = process_payment_webhook(repo, event_pro)
         assert second["status"] == "processed"
         assert second["upgrade_applied"] is True
-        assert second["points_granted"] == 2000
+        assert second["points_granted"] == 3000
 
         upgraded = repo.get_active_subscription("alice", now=upgrade_time)
         assert upgraded is not None
         assert upgraded.plan_id == pro.id
         assert upgraded.expires_at.date() == (upgrade_time + timedelta(days=30)).date()
-        assert repo.get_user_point_balance("alice") == 3000
+        assert repo.get_user_point_balance("alice") == 4000
         assert order_basic.id != order_pro.id
+
+    engine.dispose()
+
+
+def test_renewal_same_plan_resets_expiry_and_grants_full_points() -> None:
+    engine, session_factory = make_db()
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    with session_scope(session_factory) as session:
+        repo = BillingRepository(session)
+        monthly = repo.create_plan(code="pro_monthly", name="Pro", price_cents=19800, monthly_points=1000)
+
+        repo.create_order(
+            user_id="alice",
+            plan_id=monthly.id,
+            amount_cents=19800,
+            currency="cny",
+            provider="mockpay",
+            external_order_id="ord_renewal_1",
+            idempotency_key="checkout:alice:renewal-1",
+        )
+        first = process_payment_webhook(
+            repo,
+            {
+                "event_type": "payment.succeeded",
+                "event_id": "evt_renewal_1",
+                "provider": "mockpay",
+                "data": {
+                    "external_order_id": "ord_renewal_1",
+                    "amount_cents": 19800,
+                    "currency": "cny",
+                    "paid_at": now.isoformat(),
+                },
+            },
+        )
+        assert first["points_granted"] == 1000
+        first_sub = repo.get_active_subscription("alice", now=now)
+        assert first_sub is not None
+        assert first_sub.expires_at.date() == (now + timedelta(days=30)).date()
+        assert repo.get_user_point_balance("alice") == 1000
+
+        renew_time = now + timedelta(days=10)
+        repo.create_order(
+            user_id="alice",
+            plan_id=monthly.id,
+            amount_cents=19800,
+            currency="cny",
+            provider="mockpay",
+            external_order_id="ord_renewal_2",
+            idempotency_key="checkout:alice:renewal-2",
+        )
+        second = process_payment_webhook(
+            repo,
+            {
+                "event_type": "payment.succeeded",
+                "event_id": "evt_renewal_2",
+                "provider": "mockpay",
+                "data": {
+                    "external_order_id": "ord_renewal_2",
+                    "amount_cents": 19800,
+                    "currency": "cny",
+                    "paid_at": renew_time.isoformat(),
+                },
+            },
+        )
+        assert second["status"] == "processed"
+        assert second["upgrade_applied"] is False
+        assert second["points_granted"] == 1000
+
+        renewed = repo.get_active_subscription("alice", now=renew_time)
+        assert renewed is not None
+        assert renewed.plan_id == monthly.id
+        assert renewed.expires_at.date() == (renew_time + timedelta(days=30)).date()
+        assert repo.get_user_point_balance("alice") == 2000
 
     engine.dispose()

@@ -845,7 +845,12 @@ button:disabled {
 
 .billing-plan-table .table-header,
 .billing-plan-table .table-row {
-  grid-template-columns: 1fr 1.5fr 1fr 1fr 0.9fr 2.7fr;
+  grid-template-columns: 1fr 1.3fr 0.9fr 0.8fr 0.9fr 0.9fr 0.8fr 3.2fr;
+}
+
+.billing-entitlement-table .table-header,
+.billing-entitlement-table .table-row {
+  grid-template-columns: 1.3fr 0.8fr 1.1fr 1.8fr 1.6fr 1.4fr;
 }
 
 .billing-user-table .table-header,
@@ -4545,7 +4550,9 @@ button:disabled {
   .billing-order-table .table-header,
   .billing-order-table .table-row,
   .billing-audit-table .table-header,
-  .billing-audit-table .table-row {
+  .billing-audit-table .table-row,
+  .billing-entitlement-table .table-header,
+  .billing-entitlement-table .table-row {
     grid-template-columns: 1fr;
   }
 

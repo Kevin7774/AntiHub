@@ -178,19 +178,14 @@ def process_payment_webhook(
     current = paid_at or dt.datetime.now(dt.timezone.utc)
     duration_days = _plan_duration_days(getattr(plan, "code", ""))
     grant_points = int(getattr(plan, "monthly_points", 0) or 0)
-    reset_existing_active = False
-    upgrade_applied = False
-
+    # v1 commercial rule:
+    # - renew/cover always resets subscription window from "now"
+    # - grant full plan credits every successful paid order
     active_sub = repo.get_active_subscription(order.user_id, now=current)
-    if active_sub is not None and str(active_sub.plan_id or "") != str(plan.id or ""):
-        active_plan = getattr(active_sub, "plan", None) or repo.get_plan_by_id(str(active_sub.plan_id))
-        old_price = int(getattr(active_plan, "price_cents", 0) or 0)
-        new_price = int(getattr(plan, "price_cents", 0) or 0)
-        if new_price > old_price:
-            old_points = int(getattr(active_plan, "monthly_points", 0) or 0)
-            grant_points = max(0, grant_points - old_points)
-            reset_existing_active = True
-            upgrade_applied = True
+    reset_existing_active = active_sub is not None
+    upgrade_applied = bool(
+        active_sub is not None and str(getattr(active_sub, "plan_id", "") or "") != str(getattr(plan, "id", "") or "")
+    )
 
     try:
         repo.mark_order_paid(order.id, paid_at=paid_at, provider_payload=json.dumps(event, ensure_ascii=False))
