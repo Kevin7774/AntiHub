@@ -69,6 +69,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       celery -A worker:celery_app worker
+      --beat
       --loglevel=info
       --concurrency=${CELERY_CONCURRENCY:-2}
       --max-tasks-per-child=${CELERY_MAX_TASKS:-50}
