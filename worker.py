@@ -103,6 +103,21 @@ celery_app.conf.task_default_retry_delay = WORKER_TASK_RETRY_DELAY_SECONDS
 celery_app.conf.task_acks_late = True
 celery_app.conf.worker_prefetch_multiplier = 1
 
+# ─── Celery beat schedule ───────────────────────────────────────────
+celery_app.conf.beat_schedule = {
+    "close-timed-out-orders-every-10m": {
+        "task": "worker.close_timed_out_orders_task",
+        "schedule": 600.0,  # every 10 minutes
+    },
+}
+
+
+@celery_app.task(name="worker.close_timed_out_orders_task", ignore_result=True)
+def close_timed_out_orders_task() -> int:
+    from billing.tasks import run_close_timed_out_orders
+
+    return run_close_timed_out_orders()
+
 
 class _MemoryRedis:
     def __init__(self) -> None:
