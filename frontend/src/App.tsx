@@ -962,10 +962,11 @@ function LoginScreen({
   onRegister: (username: string, password: string, tenantName: string, tenantCode: string) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [tenantName, setTenantName] = useState("");
   const [tenantCode, setTenantCode] = useState("");
+  const [showTenantFields, setShowTenantFields] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1015,9 +1016,11 @@ function LoginScreen({
           </button>
         </div>
         <div className="section-title">{mode === "login" ? "登录" : "注册并创建租户空间"}</div>
-        <div className="muted auth-sub">
-          API: <span className="mono">{apiBase || "<same-origin>"}</span>
-        </div>
+        {import.meta.env.DEV ? (
+          <div className="muted auth-sub">
+            API: <span className="mono">{apiBase || "<same-origin>"}</span>
+          </div>
+        ) : null}
         {mode === "register" ? <div className="muted auth-sub">注册后会自动创建并绑定你的租户空间。</div> : null}
         {status === "checking" ? <div className="muted auth-status">正在检查登录状态…</div> : null}
         <form className="form auth-form" onSubmit={handleSubmit}>
@@ -1026,7 +1029,7 @@ function LoginScreen({
             <input
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="admin"
+              placeholder="请输入用户名"
               autoComplete="username"
               disabled={submitting}
             />
@@ -1044,26 +1047,37 @@ function LoginScreen({
           </label>
           {mode === "register" ? (
             <>
-              <label className="field">
-                <span>租户名称</span>
-                <input
-                  value={tenantName}
-                  onChange={(event) => setTenantName(event.target.value)}
-                  placeholder="例如：Zed Studio"
-                  autoComplete="organization"
-                  disabled={submitting}
-                />
-              </label>
-              <label className="field">
-                <span>租户代号（可选）</span>
-                <input
-                  value={tenantCode}
-                  onChange={(event) => setTenantCode(event.target.value)}
-                  placeholder="例如：zed-studio"
-                  autoComplete="off"
-                  disabled={submitting}
-                />
-              </label>
+              <button
+                type="button"
+                className="text-link auth-tenant-toggle"
+                onClick={() => setShowTenantFields((v) => !v)}
+              >
+                {showTenantFields ? "收起团队信息" : "填写团队信息（可选）"}
+              </button>
+              {showTenantFields ? (
+                <>
+                  <label className="field">
+                    <span>租户名称（可选）</span>
+                    <input
+                      value={tenantName}
+                      onChange={(event) => setTenantName(event.target.value)}
+                      placeholder="例如：Zed Studio"
+                      autoComplete="organization"
+                      disabled={submitting}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>租户代号（可选）</span>
+                    <input
+                      value={tenantCode}
+                      onChange={(event) => setTenantCode(event.target.value)}
+                      placeholder="例如：zed-studio"
+                      autoComplete="off"
+                      disabled={submitting}
+                    />
+                  </label>
+                </>
+              ) : null}
             </>
           ) : null}
           {error ? <div className="error-banner auth-error">{error}</div> : null}
@@ -1819,6 +1833,7 @@ function PaymentModal({
   const successTimerRef = useRef<number | null>(null);
   const startedAtRef = useRef<number>(0);
   const completedRef = useRef(false);
+  const [showLink, setShowLink] = useState(false);
 
   const clearSuccessTimer = useCallback(() => {
     if (successTimerRef.current) {
@@ -1964,9 +1979,15 @@ function PaymentModal({
               <CopyButton value={externalOrderId} label="复制订单号" />
             </div>
             <div className="payment-qr-meta">
-              <span className="muted">链接</span>
-              <span className="mono payment-url">{url}</span>
-              <CopyButton value={url} label="复制链接" />
+              {showLink ? (
+                <>
+                  <span className="mono payment-url">{url}</span>
+                  <CopyButton value={url} label="复制链接" />
+                  <button type="button" className="text-link" onClick={() => setShowLink(false)} style={{ fontSize: "0.75em" }}>收起</button>
+                </>
+              ) : (
+                <button type="button" className="text-link" onClick={() => setShowLink(true)} style={{ fontSize: "0.8em" }}>显示链接</button>
+              )}
             </div>
           </div>
         ) : (
@@ -1975,7 +1996,7 @@ function PaymentModal({
 
         <div className="modal-actions">
           <div className="muted">
-            {success ? "支付已确认，正在同步…" : polling ? `检测中 · ${localizeOrderStatus(status)}` : `已暂停检测 · ${localizeOrderStatus(status)}`}
+            {success ? "支付已确认，正在同步…" : polling ? `自动检测中 · 当前：${localizeOrderStatus(status)}` : `自动检测已暂停 · 当前：${localizeOrderStatus(status)}`}
           </div>
           <div className="row-actions">
             <button className="ghost" type="button" onClick={() => void checkNow()} disabled={success}>
@@ -2796,14 +2817,14 @@ function AdminBillingPage({
         <div className="card table-card">
           <div className="table billing-admin-table billing-plan-table">
             <div className="table-header">
-              <div className="cell">Code</div>
-              <div className="cell">Name</div>
-              <div className="cell">Cycle</div>
-              <div className="cell">Trial</div>
-              <div className="cell">Price</div>
-              <div className="cell">Points</div>
-              <div className="cell">Active</div>
-              <div className="cell">Actions</div>
+              <div className="cell">代号</div>
+              <div className="cell">名称</div>
+              <div className="cell">周期</div>
+              <div className="cell">试用</div>
+              <div className="cell">价格</div>
+              <div className="cell">积分</div>
+              <div className="cell">状态</div>
+              <div className="cell">操作</div>
             </div>
             {plans.map((plan) => (
               <div className="table-row" key={plan.plan_id}>
@@ -2972,12 +2993,12 @@ function AdminBillingPage({
               </div>
               <div className="table billing-admin-table billing-entitlement-table">
                 <div className="table-header">
-                  <div className="cell">Key</div>
-                  <div className="cell">Enabled</div>
-                  <div className="cell">Limit</div>
-                  <div className="cell">Value</div>
-                  <div className="cell">Metadata</div>
-                  <div className="cell">Actions</div>
+                  <div className="cell">权限键</div>
+                  <div className="cell">启用</div>
+                  <div className="cell">限额</div>
+                  <div className="cell">值</div>
+                  <div className="cell">元数据</div>
+                  <div className="cell">操作</div>
                 </div>
                 {planEntitlements.map((item) => (
                   <div className="table-row" key={item.entitlement_id}>
@@ -3110,14 +3131,14 @@ function AdminBillingPage({
           <div className="card table-card">
             <div className="table billing-admin-table billing-user-table">
               <div className="table-header">
-                <div className="cell">User</div>
-                <div className="cell">Role</div>
-                <div className="cell">Tenant</div>
-                <div className="cell">Account</div>
-                <div className="cell">Plan</div>
-                <div className="cell">Expire At</div>
-                <div className="cell">Points</div>
-                <div className="cell">Sub Status</div>
+                <div className="cell">用户</div>
+                <div className="cell">角色</div>
+                <div className="cell">租户</div>
+                <div className="cell">账号</div>
+                <div className="cell">套餐</div>
+                <div className="cell">到期</div>
+                <div className="cell">积分</div>
+                <div className="cell">订阅状态</div>
               </div>
               {userBilling.map((item) => (
                 <div className="table-row" key={item.username}>
@@ -3150,12 +3171,12 @@ function AdminBillingPage({
         <div className="card table-card">
           <div className="table billing-admin-table billing-order-table">
             <div className="table-header">
-              <div className="cell">Created</div>
-              <div className="cell">User</div>
-              <div className="cell">Plan</div>
-              <div className="cell">Amount</div>
-              <div className="cell">Status</div>
-              <div className="cell">External</div>
+              <div className="cell">创建时间</div>
+              <div className="cell">用户</div>
+              <div className="cell">套餐</div>
+              <div className="cell">金额</div>
+              <div className="cell">状态</div>
+              <div className="cell">外部订单</div>
             </div>
             {orders.map((order) => (
               <div className="table-row" key={order.order_id}>
@@ -3216,12 +3237,12 @@ function AdminBillingPage({
           <div className="card table-card">
             <div className="table billing-admin-table billing-audit-table">
               <div className="table-header">
-                <div className="cell">Time</div>
-                <div className="cell">Provider</div>
-                <div className="cell">Event</div>
-                <div className="cell">External</div>
-                <div className="cell">Sig</div>
-                <div className="cell">Outcome</div>
+                <div className="cell">时间</div>
+                <div className="cell">提供商</div>
+                <div className="cell">事件</div>
+                <div className="cell">外部标识</div>
+                <div className="cell">签名</div>
+                <div className="cell">结果</div>
               </div>
               {audit.map((log) => (
                 <div className="table-row is-clickable" key={log.log_id} onClick={() => openAuditDetail(log.log_id)}>

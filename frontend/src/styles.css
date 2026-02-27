@@ -4682,3 +4682,10 @@ button:disabled {
   font-size: 0.78rem;
   color: var(--accent-warm);
 }
+
+/* ─── Auth tenant toggle ─── */
+
+.auth-tenant-toggle {
+  font-size: 0.85em;
+  margin: 0.25rem 0;
+}
