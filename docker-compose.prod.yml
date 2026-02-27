@@ -27,6 +27,7 @@ services:
     volumes:
       - ./.antihub:/app/.antihub
       - ./logs:/app/logs
+      - ./certs:/app/certs:ro
     command: >
       sh -c "python scripts/init_prod_db.py &&
       exec gunicorn -k uvicorn.workers.UvicornWorker

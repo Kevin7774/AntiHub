@@ -1592,7 +1592,7 @@ function BillingPage({
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        pushToast({ type: "error", message: "发起订阅失败", detail: message });
+        pushToast({ type: "error", message: "发起订阅失败", detail: `${message}。如需帮助请联系客服 3193773138@qq.com` });
       } finally {
         setCheckoutBusy(null);
       }
@@ -1887,7 +1887,7 @@ function PaymentModal({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       stopPolling();
-      pushToast({ type: "error", message: "状态检测失败", detail: message });
+      pushToast({ type: "error", message: "状态检测失败", detail: `${message}。可点击手动校验重试，或联系客服 3193773138@qq.com` });
     }
   }, [checkOnce, finishAsPaid, polling, pushToast, stopPolling]);
 
@@ -2065,7 +2065,7 @@ function PointsPaywallModal({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setPlans((prev) => (Array.isArray(prev) && prev.length > 0 ? prev : cloneBillingFallbackPlans()));
-      pushToast({ type: "error", message: "充值面板加载失败", detail: message });
+      pushToast({ type: "error", message: "充值面板加载失败", detail: `${message}。请刷新页面重试。` });
     } finally {
       setLoading(false);
     }
@@ -2121,7 +2121,7 @@ function PointsPaywallModal({
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        pushToast({ type: "error", message: "发起充值失败", detail: message });
+        pushToast({ type: "error", message: "发起充值失败", detail: `${message}。如需帮助请联系客服 3193773138@qq.com` });
       } finally {
         setCheckoutBusy(null);
       }

@@ -469,6 +469,12 @@ async def lifespan(_: FastAPI):
     if AUTH_ENABLED:
         if not AUTH_TOKEN_SECRET:
             raise RuntimeError("AUTH_TOKEN_SECRET is required when AUTH_ENABLED=true")
+    if str(APP_ENV or "").strip().lower() in {"prod", "production"}:
+        if str(PAYMENT_PROVIDER or "").strip().lower() == "stripe":
+            raise RuntimeError(
+                "PAYMENT_PROVIDER=stripe is not supported for production launch. "
+                "Set PAYMENT_PROVIDER=wechatpay (or mock for testing)."
+            )
     if STARTUP_BOOTSTRAP_ENABLED:
         init_billing_db()
         init_decision_db()
@@ -2842,6 +2848,11 @@ async def health_billing() -> dict:
     internal_ready = bool(PAYMENT_WEBHOOK_SECRET)
     if not internal_ready:
         report["details"]["PAYMENT_WEBHOOK_SECRET"] = False
+
+    if str(PAYMENT_PROVIDER or "").strip().lower() == "stripe":
+        report["details"]["stripe"] = "StripeProvider is not implemented; set PAYMENT_PROVIDER=wechatpay or mock"
+        report["config"] = "error"
+        report["status"] = "error"
 
     wechat_checkout_ready = True
     if str(PAYMENT_PROVIDER or "").strip().lower() == "wechatpay":

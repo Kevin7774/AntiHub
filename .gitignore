@@ -45,3 +45,10 @@ playwright-report/
 
 # PostgreSQL / Redis data volumes
 data/
+
+# Payment certificates / private keys (NEVER commit)
+certs/
+*.pem
+*.key
+*.p12
+*.pfx
