@@ -32,6 +32,7 @@ def test_recommendations_rate_limit(monkeypatch) -> None:
         json.dumps({"alice": {"password": "alice123", "role": "user"}}),
     )
     monkeypatch.setattr(main, "AUTH_TOKEN_TTL_SECONDS", 3600)
+    monkeypatch.setattr(main, "DISABLE_RECOMMEND_RATE_LIMIT", False)
     monkeypatch.setattr(main, "session_scope", _noop_session_scope)
     monkeypatch.setattr(main, "resolve_user_rpm", lambda _username: 2)
 
@@ -96,6 +97,7 @@ def test_recommendations_rate_limit_returns_503_when_unavailable(monkeypatch) ->
         json.dumps({"alice": {"password": "alice123", "role": "user"}}),
     )
     monkeypatch.setattr(main, "AUTH_TOKEN_TTL_SECONDS", 3600)
+    monkeypatch.setattr(main, "DISABLE_RECOMMEND_RATE_LIMIT", False)
     monkeypatch.setattr(main, "session_scope", _noop_session_scope)
     monkeypatch.setattr(main, "resolve_user_rpm", lambda _username: 2)
 
