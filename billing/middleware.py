@@ -153,25 +153,26 @@ class BillingRateLimiter:
         self._client = self._build_redis_client()
         self._memory_lock = threading.Lock()
         self._memory_buckets: dict[str, tuple[float, float]] = {}
-        if _is_production_env() and self._client is None:
-            raise RuntimeError("Redis is required for rate limiting in production")
+        if self._client is None:
+            log_event(
+                _LOGGER,
+                40 if _is_production_env() else 30,
+                "rate_limit.init_no_redis_using_memory",
+                production=_is_production_env(),
+            )
 
     @staticmethod
     def _build_redis_client() -> redis.Redis | None:
         if REDIS_DISABLED or str(REDIS_URL).startswith("memory://"):
-            if _is_production_env():
-                raise RuntimeError("REDIS_URL must point to a real Redis instance in production")
             return None
         try:
             client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
             client.ping()
             return client
         except Exception as exc:  # noqa: BLE001
-            if _is_production_env():
-                raise RuntimeError("Redis is unavailable in production") from exc
             log_event(
                 _LOGGER,
-                30,
+                40 if _is_production_env() else 30,
                 "rate_limit.redis_unavailable_fallback_memory",
                 redis_url=REDIS_URL,
                 error=str(exc),
@@ -187,19 +188,15 @@ class BillingRateLimiter:
             try:
                 return self._allow_redis(key=key, capacity=capacity, cost=spend)
             except Exception as exc:  # noqa: BLE001
-                # Redis outage should degrade to in-process limiting instead of failing requests.
-                if _is_production_env():
-                    raise RuntimeError("Redis rate limiter is unavailable in production") from exc
+                # Redis outage: degrade to in-process limiting instead of failing requests.
                 log_event(
                     _LOGGER,
-                    30,
+                    40,
                     "rate_limit.redis_call_failed_fallback_memory",
                     key=key,
                     error=str(exc),
                 )
                 self._client = None
-        if _is_production_env():
-            raise RuntimeError("Redis rate limiter is required in production")
         return self._allow_memory(key=key, capacity=capacity, cost=spend)
 
     def _allow_redis(self, *, key: str, capacity: int, cost: int) -> RateLimitResult:

@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--monthly-points",
         type=int,
-        default=1000,
+        default=10000,
         help="Points granted per period for the monthly plan (quarterly/yearly scale automatically)",
     )
     parser.add_argument("--currency", default="cny", help="Plan currency code (default: cny)")

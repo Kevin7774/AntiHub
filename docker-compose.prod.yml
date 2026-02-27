@@ -12,7 +12,7 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: 8000
       STARTUP_BOOTSTRAP_ENABLED: "false"
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://antihub:change_me@db:5432/antihub}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env.prod}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       REDIS_DISABLED: "false"
       CASE_STORE_BACKEND: ${CASE_STORE_BACKEND:-database}
@@ -27,6 +27,7 @@ services:
     volumes:
       - ./.antihub:/app/.antihub
       - ./logs:/app/logs
+      - ./certs:/app/certs:ro
     command: >
       sh -c "python scripts/init_prod_db.py &&
       exec gunicorn -k uvicorn.workers.UvicornWorker
@@ -50,7 +51,7 @@ services:
       - .env.prod
     environment:
       APP_ENV: production
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://antihub:change_me@db:5432/antihub}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env.prod}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       REDIS_DISABLED: "false"
       CASE_STORE_BACKEND: ${CASE_STORE_BACKEND:-database}
@@ -68,6 +69,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       celery -A worker:celery_app worker
+      --beat
       --loglevel=info
       --concurrency=${CELERY_CONCURRENCY:-2}
       --max-tasks-per-child=${CELERY_MAX_TASKS:-50}
@@ -109,7 +111,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-antihub}
       POSTGRES_USER: ${POSTGRES_USER:-antihub}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:

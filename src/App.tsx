@@ -47,7 +47,64 @@ type BillingPlan = {
   price_cents: number;
   monthly_points: number;
   active: boolean;
+  billing_cycle?: string | null;
+  trial_days?: number | null;
+  metadata?: Record<string, unknown> | null;
 };
+
+type BillingPlanEntitlement = {
+  entitlement_id: string;
+  plan_id: string;
+  key: string;
+  enabled: boolean;
+  value?: unknown;
+  limit?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
+const BILLING_FALLBACK_PLANS: BillingPlan[] = [
+  {
+    plan_id: "seed_monthly_198",
+    code: "monthly_198",
+    name: "月度订阅",
+    description: "适合高频日常协作，快速交付关键分析。",
+    currency: "cny",
+    price_cents: 19800,
+    monthly_points: 10000,
+    active: true,
+  },
+  {
+    plan_id: "seed_quarterly_398",
+    code: "quarterly_398",
+    name: "季度订阅",
+    description: "热门方案，兼顾稳定产出与成本效率。",
+    currency: "cny",
+    price_cents: 39800,
+    monthly_points: 30000,
+    active: true,
+  },
+  {
+    plan_id: "seed_yearly_1980",
+    code: "yearly_1980",
+    name: "年度订阅",
+    description: "适合长期项目与管理层持续决策场景。",
+    currency: "cny",
+    price_cents: 198000,
+    monthly_points: 150000,
+    active: true,
+  },
+];
+
+function cloneBillingFallbackPlans(): BillingPlan[] {
+  return BILLING_FALLBACK_PLANS.map((item) => ({ ...item }));
+}
+
+function normalizePlansOrFallback(rows: BillingPlan[] | null | undefined): BillingPlan[] {
+  if (Array.isArray(rows) && rows.length > 0) {
+    return rows;
+  }
+  return cloneBillingFallbackPlans();
+}
 
 type BillingCheckoutResponse = {
   provider: string;
@@ -905,10 +962,11 @@ function LoginScreen({
   onRegister: (username: string, password: string, tenantName: string, tenantCode: string) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [tenantName, setTenantName] = useState("");
   const [tenantCode, setTenantCode] = useState("");
+  const [showTenantFields, setShowTenantFields] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -958,9 +1016,11 @@ function LoginScreen({
           </button>
         </div>
         <div className="section-title">{mode === "login" ? "登录" : "注册并创建租户空间"}</div>
-        <div className="muted auth-sub">
-          API: <span className="mono">{apiBase || "<same-origin>"}</span>
-        </div>
+        {import.meta.env.DEV ? (
+          <div className="muted auth-sub">
+            API: <span className="mono">{apiBase || "<same-origin>"}</span>
+          </div>
+        ) : null}
         {mode === "register" ? <div className="muted auth-sub">注册后会自动创建并绑定你的租户空间。</div> : null}
         {status === "checking" ? <div className="muted auth-status">正在检查登录状态…</div> : null}
         <form className="form auth-form" onSubmit={handleSubmit}>
@@ -969,7 +1029,7 @@ function LoginScreen({
             <input
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="admin"
+              placeholder="请输入用户名"
               autoComplete="username"
               disabled={submitting}
             />
@@ -987,26 +1047,37 @@ function LoginScreen({
           </label>
           {mode === "register" ? (
             <>
-              <label className="field">
-                <span>租户名称</span>
-                <input
-                  value={tenantName}
-                  onChange={(event) => setTenantName(event.target.value)}
-                  placeholder="例如：Zed Studio"
-                  autoComplete="organization"
-                  disabled={submitting}
-                />
-              </label>
-              <label className="field">
-                <span>租户代号（可选）</span>
-                <input
-                  value={tenantCode}
-                  onChange={(event) => setTenantCode(event.target.value)}
-                  placeholder="例如：zed-studio"
-                  autoComplete="off"
-                  disabled={submitting}
-                />
-              </label>
+              <button
+                type="button"
+                className="text-link auth-tenant-toggle"
+                onClick={() => setShowTenantFields((v) => !v)}
+              >
+                {showTenantFields ? "收起团队信息" : "填写团队信息（可选）"}
+              </button>
+              {showTenantFields ? (
+                <>
+                  <label className="field">
+                    <span>租户名称（可选）</span>
+                    <input
+                      value={tenantName}
+                      onChange={(event) => setTenantName(event.target.value)}
+                      placeholder="例如：Zed Studio"
+                      autoComplete="organization"
+                      disabled={submitting}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>租户代号（可选）</span>
+                    <input
+                      value={tenantCode}
+                      onChange={(event) => setTenantCode(event.target.value)}
+                      placeholder="例如：zed-studio"
+                      autoComplete="off"
+                      disabled={submitting}
+                    />
+                  </label>
+                </>
+              ) : null}
             </>
           ) : null}
           {error ? <div className="error-banner auth-error">{error}</div> : null}
@@ -1086,17 +1157,17 @@ function planTierPeriod(tier: BillingPlanTier): string {
 }
 
 function planTierFeatures(tier: BillingPlanTier, points: number): string[] {
-  const pointsText = `${formatNumber(points)} 积分/月`;
+  const pointsText = `购买即获 ${formatNumber(points)} 积分`;
   if (tier === "monthly") {
-    return ["扫码支付，秒级开通", `每月发放 ${pointsText}`, "支持随时续费升级"];
+    return ["扫码支付，秒级开通", pointsText, "支持随时续费升级"];
   }
   if (tier === "quarterly") {
-    return ["季度方案更省心", `每月发放 ${pointsText}`, "适合持续运营场景"];
+    return ["季度方案更省心", pointsText, "适合持续运营场景"];
   }
   if (tier === "yearly") {
-    return ["年度投入，综合成本更低", `每月发放 ${pointsText}`, "推荐给长期项目与团队"];
+    return ["年度投入，综合成本更低", pointsText, "推荐给长期项目与团队"];
   }
-  return [`每月发放 ${pointsText}`, "支付成功后自动激活", "支持扫码支付"];
+  return [pointsText, "支付成功后自动激活", "支持扫码支付"];
 }
 
 function hasAdminAccess(role: string): boolean {
@@ -1315,9 +1386,9 @@ function TenantWorkspacePage({
             <span className="kv-key">订阅</span>
             <span className="kv-value">
               {snapshot?.subscription.status === "active" ? (
-                <span className="pill pill-success">Active</span>
+                <span className="pill pill-success">生效中</span>
               ) : (
-                <span className="pill pill-muted">{snapshot?.subscription.status || "none"}</span>
+                <span className="pill pill-muted">未订阅</span>
               )}
             </span>
           </div>
@@ -1441,12 +1512,14 @@ function BillingPage({
   apiFetch,
   role,
   pushToast,
+  navigate,
 }: {
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   role: string;
   pushToast: (toast: Toast) => void;
+  navigate: (path: string) => void;
 }) {
-  const [plans, setPlans] = useState<BillingPlan[]>([]);
+  const [plans, setPlans] = useState<BillingPlan[]>(() => cloneBillingFallbackPlans());
   const [subscription, setSubscription] = useState<BillingSubscriptionSnapshot | null>(null);
   const [points, setPoints] = useState<BillingPointsSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1457,7 +1530,8 @@ function BillingPage({
     planCode: string;
     checkoutUrl: string;
     externalOrderId: string;
-  }>({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "" });
+    amountText: string;
+  }>({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "", amountText: "" });
 
   const loadPlans = useCallback(async () => {
     const response = await apiFetch("/billing/plans");
@@ -1484,10 +1558,11 @@ function BillingPage({
     setLoading(true);
     try {
       const data = await loadPlans();
-      setPlans(Array.isArray(data) ? data : []);
+      setPlans(normalizePlansOrFallback(Array.isArray(data) ? data : []));
       await loadStatus();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      setPlans((prev) => (Array.isArray(prev) && prev.length > 0 ? prev : cloneBillingFallbackPlans()));
       pushToast({ type: "error", message: "会员数据加载失败", detail: message });
     } finally {
       setLoading(false);
@@ -1527,10 +1602,11 @@ function BillingPage({
           planCode: plan.code,
           checkoutUrl: url,
           externalOrderId,
+          amountText: compactPlanPrice(plan.price_cents, plan.currency),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        pushToast({ type: "error", message: "发起订阅失败", detail: message });
+        pushToast({ type: "error", message: "发起订阅失败", detail: `${message}。如需帮助请联系客服 3193773138@qq.com` });
       } finally {
         setCheckoutBusy(null);
       }
@@ -1547,8 +1623,9 @@ function BillingPage({
   const active = subscription?.status === "active";
   const activePlanCode = subscription?.plan_code || null;
   const visiblePlans = useMemo(() => {
-    if (hasAdminAccess(role)) return plans;
-    return plans.filter((item) => item.active);
+    const source = hasAdminAccess(role) ? plans : plans.filter((item) => item.active);
+    if (source.length > 0) return source;
+    return cloneBillingFallbackPlans();
   }, [plans, role]);
 
   const showcasePlans = useMemo(() => {
@@ -1598,12 +1675,12 @@ function BillingPage({
             <div className="kv-row">
               <span className="kv-key">订阅</span>
               <span className="kv-value">
-                {active ? <span className="pill pill-success">Active</span> : <span className="pill pill-muted">None</span>}
+                {active ? <span className="pill pill-success">生效中</span> : <span className="pill pill-muted">未订阅</span>}
               </span>
             </div>
             <div className="kv-row">
               <span className="kv-key">套餐</span>
-              <span className="kv-value mono">{activePlanCode || "-"}</span>
+              <span className="kv-value mono">{subscription?.plan_name || activePlanCode || "-"}</span>
             </div>
             <div className="kv-row">
               <span className="kv-key">到期</span>
@@ -1614,7 +1691,7 @@ function BillingPage({
             <div className="section-title">积分余额</div>
             <div className="billing-points">
               <div className="billing-points-value">{points ? formatNumber(points.balance) : "-"}</div>
-              <div className="muted">每次订阅成功后按套餐发放积分（按订单幂等）。</div>
+              <div className="muted">支付成功后按套餐一次性发放积分。</div>
             </div>
           </div>
         </div>
@@ -1624,7 +1701,12 @@ function BillingPage({
         <div className="pricing-showcase-head">
           <div>
             <div className="section-title">升级套餐</div>
-            <div className="muted">扫码支付开通会员。当前定价：月 198￥ / 季 398￥ / 年 1980￥。</div>
+            <div className="muted">扫码支付开通会员，支付成功后积分即时到账。</div>
+            <div className="trust-hint">
+              安全支付 · 微信官方通道 · 如需帮助请联系 <a href="mailto:3193773138@qq.com">3193773138@qq.com</a>
+              {" · "}
+              <button type="button" className="text-link" onClick={() => navigate("/refund")}>退款政策</button>
+            </div>
           </div>
         </div>
         {hasAdminAccess(role) ? (
@@ -1693,12 +1775,15 @@ function BillingPage({
         </div>
       </div>
 
+      <LegalFooter navigate={navigate} />
+
       <PaymentModal
         open={modalState.open}
         planName={modalState.planName}
         planCode={modalState.planCode}
         checkoutUrl={modalState.checkoutUrl}
         externalOrderId={modalState.externalOrderId}
+        amountText={modalState.amountText}
         apiFetch={apiFetch}
         onClose={() => setModalState((prev) => ({ ...prev, open: false }))}
         onPaid={handlePaid}
@@ -1708,12 +1793,23 @@ function BillingPage({
   );
 }
 
+function localizeOrderStatus(raw: string): string {
+  const s = (raw || "").toLowerCase();
+  if (s === "pending") return "等待支付";
+  if (s === "paid") return "已支付";
+  if (s === "failed") return "支付失败";
+  if (s === "canceled") return "已取消";
+  if (s === "refunded") return "已退款";
+  return raw || "未知";
+}
+
 function PaymentModal({
   open,
   planName,
   planCode,
   checkoutUrl,
   externalOrderId,
+  amountText,
   apiFetch,
   onClose,
   onPaid,
@@ -1724,6 +1820,7 @@ function PaymentModal({
   planCode: string;
   checkoutUrl: string;
   externalOrderId: string;
+  amountText?: string;
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   onClose: () => void;
   onPaid: () => void;
@@ -1736,6 +1833,7 @@ function PaymentModal({
   const successTimerRef = useRef<number | null>(null);
   const startedAtRef = useRef<number>(0);
   const completedRef = useRef(false);
+  const [showLink, setShowLink] = useState(false);
 
   const clearSuccessTimer = useCallback(() => {
     if (successTimerRef.current) {
@@ -1804,7 +1902,7 @@ function PaymentModal({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       stopPolling();
-      pushToast({ type: "error", message: "状态检测失败", detail: message });
+      pushToast({ type: "error", message: "状态检测失败", detail: `${message}。可点击手动校验重试，或联系客服 3193773138@qq.com` });
     }
   }, [checkOnce, finishAsPaid, polling, pushToast, stopPolling]);
 
@@ -1861,6 +1959,7 @@ function PaymentModal({
             <div className="section-title">微信扫码支付</div>
             <div className="muted">
               套餐 <span className="mono">{planName || planCode || "-"}</span>
+              {amountText ? <> · 应付 <span className="mono">{amountText}</span></> : null}
             </div>
           </div>
           <button className="ghost" type="button" onClick={onClose} disabled={polling && success}>
@@ -1880,9 +1979,15 @@ function PaymentModal({
               <CopyButton value={externalOrderId} label="复制订单号" />
             </div>
             <div className="payment-qr-meta">
-              <span className="muted">链接</span>
-              <span className="mono payment-url">{url}</span>
-              <CopyButton value={url} label="复制链接" />
+              {showLink ? (
+                <>
+                  <span className="mono payment-url">{url}</span>
+                  <CopyButton value={url} label="复制链接" />
+                  <button type="button" className="text-link" onClick={() => setShowLink(false)} style={{ fontSize: "0.75em" }}>收起</button>
+                </>
+              ) : (
+                <button type="button" className="text-link" onClick={() => setShowLink(true)} style={{ fontSize: "0.8em" }}>显示链接</button>
+              )}
             </div>
           </div>
         ) : (
@@ -1891,7 +1996,7 @@ function PaymentModal({
 
         <div className="modal-actions">
           <div className="muted">
-            {success ? "支付已确认，正在同步…" : polling ? `检测中 · 当前状态 ${status}` : `已暂停检测 · 当前状态 ${status}`}
+            {success ? "支付已确认，正在同步…" : polling ? `自动检测中 · 当前：${localizeOrderStatus(status)}` : `自动检测已暂停 · 当前：${localizeOrderStatus(status)}`}
           </div>
           <div className="row-actions">
             <button className="ghost" type="button" onClick={() => void checkNow()} disabled={success}>
@@ -1924,7 +2029,11 @@ function PaymentModal({
             <div className="payment-success-mark">✓</div>
             <div className="payment-success-text">支付成功</div>
           </div>
-        ) : null}
+        ) : (
+          <div className="muted" style={{ marginTop: "0.5rem", fontSize: "0.8em", textAlign: "center" }}>
+            支付遇到问题？请联系客服：3193773138@qq.com
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1946,7 +2055,7 @@ function PointsPaywallModal({
   pushToast: (toast: Toast) => void;
 }) {
   const [loading, setLoading] = useState(false);
-  const [plans, setPlans] = useState<BillingPlan[]>([]);
+  const [plans, setPlans] = useState<BillingPlan[]>(() => cloneBillingFallbackPlans());
   const [points, setPoints] = useState<BillingPointsSnapshot | null>(null);
   const [checkoutBusy, setCheckoutBusy] = useState<string | null>(null);
   const [paymentState, setPaymentState] = useState<{
@@ -1955,7 +2064,8 @@ function PointsPaywallModal({
     planCode: string;
     checkoutUrl: string;
     externalOrderId: string;
-  }>({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "" });
+    amountText: string;
+  }>({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "", amountText: "" });
 
   const refresh = useCallback(async () => {
     if (!open || loading) return;
@@ -1967,7 +2077,7 @@ function PointsPaywallModal({
         throw new Error(text || `load plans failed (${plansResp.status})`);
       }
       const planRows = (await plansResp.json()) as BillingPlan[];
-      setPlans(Array.isArray(planRows) ? planRows : []);
+      setPlans(normalizePlansOrFallback(Array.isArray(planRows) ? planRows : []));
       if (pointsResp.ok) {
         setPoints((await pointsResp.json()) as BillingPointsSnapshot);
       } else {
@@ -1975,7 +2085,8 @@ function PointsPaywallModal({
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      pushToast({ type: "error", message: "充值面板加载失败", detail: message });
+      setPlans((prev) => (Array.isArray(prev) && prev.length > 0 ? prev : cloneBillingFallbackPlans()));
+      pushToast({ type: "error", message: "充值面板加载失败", detail: `${message}。请刷新页面重试。` });
     } finally {
       setLoading(false);
     }
@@ -1983,7 +2094,7 @@ function PointsPaywallModal({
 
   useEffect(() => {
     if (!open) {
-      setPaymentState({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "" });
+      setPaymentState({ open: false, planName: "", planCode: "", checkoutUrl: "", externalOrderId: "", amountText: "" });
       setCheckoutBusy(null);
       return;
     }
@@ -1991,9 +2102,11 @@ function PointsPaywallModal({
   }, [open, refresh]);
 
   const activePlans = useMemo(() => {
-    return plans
-      .filter((item) => item.active)
-      .sort((a, b) => a.price_cents - b.price_cents || a.name.localeCompare(b.name));
+    const purchasable = plans.filter((item) => item.active);
+    if (purchasable.length === 0) {
+      return cloneBillingFallbackPlans();
+    }
+    return purchasable.sort((a, b) => a.price_cents - b.price_cents || a.name.localeCompare(b.name));
   }, [plans]);
 
   const startCheckout = useCallback(
@@ -2025,10 +2138,11 @@ function PointsPaywallModal({
           planCode: plan.code,
           checkoutUrl: url,
           externalOrderId,
+          amountText: compactPlanPrice(plan.price_cents, plan.currency),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        pushToast({ type: "error", message: "发起充值失败", detail: message });
+        pushToast({ type: "error", message: "发起充值失败", detail: `${message}。如需帮助请联系客服 3193773138@qq.com` });
       } finally {
         setCheckoutBusy(null);
       }
@@ -2074,7 +2188,7 @@ function PointsPaywallModal({
                   <div className="plan-head">
                     <div>
                       <div className="plan-title">{plan.name}</div>
-                      <div className="plan-tagline">扫码支付后自动到账积分</div>
+                      <div className="plan-tagline">支付后即时到账</div>
                     </div>
                     <span className="pill pill-muted">{planIntervalLabel(plan.code)}</span>
                   </div>
@@ -2084,7 +2198,7 @@ function PointsPaywallModal({
                   <div className="plan-feature-list">
                     <div className="plan-feature-item">
                       <span className="plan-feature-dot">✦</span>
-                      <span>{formatNumber(plan.monthly_points)} 积分</span>
+                      <span>购买即获 {formatNumber(plan.monthly_points)} 积分</span>
                     </div>
                   </div>
                   <div className="plan-actions">
@@ -2112,6 +2226,7 @@ function PointsPaywallModal({
         planCode={paymentState.planCode}
         checkoutUrl={paymentState.checkoutUrl}
         externalOrderId={paymentState.externalOrderId}
+        amountText={paymentState.amountText}
         apiFetch={apiFetch}
         onClose={() => setPaymentState((prev) => ({ ...prev, open: false }))}
         onPaid={handlePaid}
@@ -2136,13 +2251,35 @@ function AdminBillingPage({
   const [orders, setOrders] = useState<BillingOrder[]>([]);
   const [audit, setAudit] = useState<BillingAuditLog[]>([]);
   const [auditDetail, setAuditDetail] = useState<BillingAuditLogDetail | null>(null);
+  const [saasAdminEnabled, setSaasAdminEnabled] = useState(true);
+  const [saasHint, setSaasHint] = useState("");
+  const [selectedPlanId, setSelectedPlanId] = useState("");
+  const [planEntitlements, setPlanEntitlements] = useState<BillingPlanEntitlement[]>([]);
+  const [entitlementLimitDrafts, setEntitlementLimitDrafts] = useState<Record<string, string>>({});
+  const [entitlementForm, setEntitlementForm] = useState({
+    key: "",
+    enabled: true,
+    limit: "",
+    valueJson: "{}",
+    metadataJson: "{}",
+  });
+  const [entitlementBusy, setEntitlementBusy] = useState(false);
+  const [bindForm, setBindForm] = useState({
+    username: "",
+    planId: "",
+    durationDays: "",
+    autoRenew: false,
+  });
+  const [bindBusy, setBindBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [savingPlanId, setSavingPlanId] = useState("");
   const [planPriceDrafts, setPlanPriceDrafts] = useState<Record<string, string>>({});
+  const [planPointsDrafts, setPlanPointsDrafts] = useState<Record<string, string>>({});
   const [userFilter, setUserFilter] = useState({ username: "", include_inactive: false });
   const [auditFilter, setAuditFilter] = useState({ provider: "", external_order_id: "", outcome: "" });
 
   const isAdmin = hasAdminAccess(role);
+
   const fetchJson = useCallback(
     async <T,>(path: string) => {
       const response = await apiFetch(path);
@@ -2155,14 +2292,93 @@ function AdminBillingPage({
     [apiFetch]
   );
 
+  const parseErrorText = useCallback(async (response: Response): Promise<string> => {
+    try {
+      const text = (await response.text()).trim();
+      if (text) return text;
+    } catch {
+      // ignore
+    }
+    return `request failed (${response.status})`;
+  }, []);
+
+  const loadAdminPlans = useCallback(async (): Promise<BillingPlan[]> => {
+    const saasResp = await apiFetch("/admin/saas/plans");
+    if (saasResp.ok) {
+      setSaasAdminEnabled(true);
+      setSaasHint("");
+      const rows = (await saasResp.json()) as BillingPlan[];
+      return Array.isArray(rows) ? rows : [];
+    }
+
+    const detail = await parseErrorText(saasResp);
+    const lower = detail.toLowerCase();
+    const featureDisabled =
+      saasResp.status === 404 &&
+      (lower.includes("feature disabled") || lower.includes("feature_disabled") || detail.includes("功能未开启"));
+
+    if (!featureDisabled) {
+      throw new Error(detail || `load /admin/saas/plans failed (${saasResp.status})`);
+    }
+
+    setSaasAdminEnabled(false);
+    setSaasHint("SaaS 管理开关未开启，当前回退到基础套餐视图。");
+    const fallbackResp = await apiFetch("/billing/plans");
+    if (!fallbackResp.ok) {
+      const fallbackText = await parseErrorText(fallbackResp);
+      throw new Error(fallbackText || `load /billing/plans failed (${fallbackResp.status})`);
+    }
+    const rows = (await fallbackResp.json()) as BillingPlan[];
+    return Array.isArray(rows) ? rows : [];
+  }, [apiFetch, parseErrorText]);
+
+  const refreshPlanEntitlements = useCallback(
+    async (planId: string) => {
+      if (!saasAdminEnabled || !planId) {
+        setPlanEntitlements([]);
+        return;
+      }
+      try {
+        const rows = await fetchJson<BillingPlanEntitlement[]>(
+          `/admin/saas/plans/${encodeURIComponent(planId)}/entitlements?include_disabled=true`
+        );
+        setPlanEntitlements(Array.isArray(rows) ? rows : []);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        pushToast({ type: "error", message: "套餐权益加载失败", detail: message });
+      }
+    },
+    [fetchJson, pushToast, saasAdminEnabled]
+  );
+
   const refresh = useCallback(async () => {
     if (!isAdmin || busy) return;
     setBusy(true);
     try {
       if (tab === "plans") {
-        const data = await fetchJson<BillingPlan[]>("/billing/plans");
-        setPlans(Array.isArray(data) ? data : []);
+        const rows = await loadAdminPlans();
+        const normalized = Array.isArray(rows) ? rows : [];
+        setPlans(normalized);
+        const nextPlanId =
+          normalized.find((item) => item.plan_id === selectedPlanId)?.plan_id || normalized[0]?.plan_id || "";
+        setSelectedPlanId(nextPlanId);
+        if (!bindForm.planId && nextPlanId) {
+          setBindForm((prev) => ({ ...prev, planId: nextPlanId }));
+        }
+        if (saasAdminEnabled && nextPlanId) {
+          await refreshPlanEntitlements(nextPlanId);
+        } else {
+          setPlanEntitlements([]);
+        }
       } else if (tab === "users") {
+        if (!plans.length) {
+          const rows = await loadAdminPlans();
+          const normalized = Array.isArray(rows) ? rows : [];
+          setPlans(normalized);
+          if (!bindForm.planId && normalized.length) {
+            setBindForm((prev) => ({ ...prev, planId: normalized[0].plan_id }));
+          }
+        }
         const query = new URLSearchParams();
         query.set("limit", "100");
         if (userFilter.username.trim()) query.set("username", userFilter.username.trim());
@@ -2194,8 +2410,14 @@ function AdminBillingPage({
     busy,
     fetchJson,
     isAdmin,
+    loadAdminPlans,
     pushToast,
+    refreshPlanEntitlements,
+    saasAdminEnabled,
+    selectedPlanId,
     tab,
+    bindForm.planId,
+    plans.length,
     userFilter.include_inactive,
     userFilter.username,
   ]);
@@ -2213,12 +2435,58 @@ function AdminBillingPage({
       });
       return next;
     });
+    setPlanPointsDrafts((prev) => {
+      const next: Record<string, string> = {};
+      plans.forEach((plan) => {
+        const existing = prev[plan.plan_id];
+        next[plan.plan_id] = existing ?? String(plan.monthly_points);
+      });
+      return next;
+    });
   }, [plans]);
 
-  const updatePlan = async (plan: BillingPlan, patch: Partial<BillingPlan>, successMessage = "套餐已更新") => {
+  useEffect(() => {
+    if (!plans.length) {
+      setSelectedPlanId("");
+      setBindForm((prev) => ({ ...prev, planId: "" }));
+      return;
+    }
+    setSelectedPlanId((prev) => (prev && plans.some((item) => item.plan_id === prev) ? prev : plans[0].plan_id));
+    setBindForm((prev) => {
+      if (prev.planId && plans.some((item) => item.plan_id === prev.planId)) {
+        return prev;
+      }
+      return { ...prev, planId: plans[0].plan_id };
+    });
+  }, [plans]);
+
+  useEffect(() => {
+    setEntitlementLimitDrafts((prev) => {
+      const next: Record<string, string> = {};
+      planEntitlements.forEach((item) => {
+        const existing = prev[item.entitlement_id];
+        next[item.entitlement_id] = existing ?? (item.limit == null ? "" : String(item.limit));
+      });
+      return next;
+    });
+  }, [planEntitlements]);
+
+  useEffect(() => {
+    if (tab !== "plans" || !saasAdminEnabled || !selectedPlanId) return;
+    void refreshPlanEntitlements(selectedPlanId);
+  }, [refreshPlanEntitlements, saasAdminEnabled, selectedPlanId, tab]);
+
+  const updatePlan = async (
+    plan: BillingPlan,
+    patch: Partial<BillingPlan>,
+    successMessage = "套餐已更新"
+  ) => {
     if (!isAdmin) return;
     try {
-      const response = await apiFetch(`/admin/billing/plans/${encodeURIComponent(plan.plan_id)}`, {
+      const endpoint = saasAdminEnabled
+        ? `/admin/saas/plans/${encodeURIComponent(plan.plan_id)}`
+        : `/admin/billing/plans/${encodeURIComponent(plan.plan_id)}`;
+      const response = await apiFetch(endpoint, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2228,11 +2496,14 @@ function AdminBillingPage({
           currency: patch.currency ?? undefined,
           price_cents: patch.price_cents ?? undefined,
           monthly_points: patch.monthly_points ?? undefined,
+          billing_cycle: patch.billing_cycle ?? undefined,
+          trial_days: patch.trial_days ?? undefined,
+          metadata: patch.metadata ?? undefined,
           active: patch.active ?? undefined,
         }),
       });
       if (!response.ok) {
-        const text = await response.text();
+        const text = await parseErrorText(response);
         throw new Error(text || `update failed (${response.status})`);
       }
       pushToast({ type: "success", message: successMessage });
@@ -2253,6 +2524,225 @@ function AdminBillingPage({
     setSavingPlanId(plan.plan_id);
     await updatePlan(plan, { price_cents: parsed }, "价格已更新");
     setSavingPlanId("");
+  };
+
+  const savePlanPoints = async (plan: BillingPlan) => {
+    const raw = (planPointsDrafts[plan.plan_id] ?? String(plan.monthly_points)).trim();
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      pushToast({ type: "error", message: "积分无效", detail: "monthly_points 必须是大于等于 0 的整数" });
+      return;
+    }
+    setSavingPlanId(plan.plan_id);
+    await updatePlan(plan, { monthly_points: parsed }, "积分额度已更新");
+    setSavingPlanId("");
+  };
+
+  const parseOptionalJson = (raw: string, label: string, fallback: unknown) => {
+    const text = String(raw || "").trim();
+    if (!text) return fallback;
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`${label} 不是合法 JSON`);
+    }
+  };
+
+  const createEntitlement = async () => {
+    if (!saasAdminEnabled) {
+      pushToast({ type: "error", message: "SaaS 管理未开启", detail: saasHint || "请先开启 FEATURE_SAAS_ADMIN_API" });
+      return;
+    }
+    if (!selectedPlanId) {
+      pushToast({ type: "error", message: "请先选择套餐" });
+      return;
+    }
+    const key = entitlementForm.key.trim().toLowerCase();
+    if (!key) {
+      pushToast({ type: "error", message: "权益 key 不能为空" });
+      return;
+    }
+    let limitValue: number | null = null;
+    const limitText = entitlementForm.limit.trim();
+    if (limitText) {
+      const parsed = Number.parseInt(limitText, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        pushToast({ type: "error", message: "limit 无效", detail: "limit 必须是大于等于 0 的整数" });
+        return;
+      }
+      limitValue = parsed;
+    }
+
+    try {
+      const valuePayload = parseOptionalJson(entitlementForm.valueJson, "value", null);
+      const metadataPayload = parseOptionalJson(entitlementForm.metadataJson, "metadata", {});
+      setEntitlementBusy(true);
+      const response = await apiFetch(`/admin/saas/plans/${encodeURIComponent(selectedPlanId)}/entitlements`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key,
+          enabled: entitlementForm.enabled,
+          limit: limitValue,
+          value: valuePayload,
+          metadata: metadataPayload,
+        }),
+      });
+      if (!response.ok) {
+        const text = await parseErrorText(response);
+        throw new Error(text || `create entitlement failed (${response.status})`);
+      }
+      setEntitlementForm({
+        key: "",
+        enabled: true,
+        limit: "",
+        valueJson: "{}",
+        metadataJson: "{}",
+      });
+      pushToast({ type: "success", message: "权益已创建" });
+      await refreshPlanEntitlements(selectedPlanId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushToast({ type: "error", message: "创建权益失败", detail: message });
+    } finally {
+      setEntitlementBusy(false);
+    }
+  };
+
+  const saveEntitlementLimit = async (item: BillingPlanEntitlement) => {
+    if (!saasAdminEnabled) return;
+    const draft = (entitlementLimitDrafts[item.entitlement_id] ?? "").trim();
+    let limitValue: number | null = null;
+    if (draft) {
+      const parsed = Number.parseInt(draft, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        pushToast({ type: "error", message: "limit 无效", detail: "limit 必须是大于等于 0 的整数" });
+        return;
+      }
+      limitValue = parsed;
+    }
+    try {
+      setEntitlementBusy(true);
+      const response = await apiFetch(`/admin/saas/entitlements/${encodeURIComponent(item.entitlement_id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: limitValue }),
+      });
+      if (!response.ok) {
+        const text = await parseErrorText(response);
+        throw new Error(text || `update entitlement failed (${response.status})`);
+      }
+      pushToast({ type: "success", message: "权益 limit 已更新" });
+      await refreshPlanEntitlements(selectedPlanId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushToast({ type: "error", message: "更新权益失败", detail: message });
+    } finally {
+      setEntitlementBusy(false);
+    }
+  };
+
+  const toggleEntitlement = async (item: BillingPlanEntitlement) => {
+    if (!saasAdminEnabled) return;
+    try {
+      setEntitlementBusy(true);
+      const response = await apiFetch(`/admin/saas/entitlements/${encodeURIComponent(item.entitlement_id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !item.enabled }),
+      });
+      if (!response.ok) {
+        const text = await parseErrorText(response);
+        throw new Error(text || `toggle entitlement failed (${response.status})`);
+      }
+      pushToast({ type: "success", message: item.enabled ? "权益已禁用" : "权益已启用" });
+      await refreshPlanEntitlements(selectedPlanId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushToast({ type: "error", message: "更新权益失败", detail: message });
+    } finally {
+      setEntitlementBusy(false);
+    }
+  };
+
+  const deleteEntitlement = async (item: BillingPlanEntitlement) => {
+    if (!saasAdminEnabled) return;
+    try {
+      setEntitlementBusy(true);
+      const response = await apiFetch(`/admin/saas/entitlements/${encodeURIComponent(item.entitlement_id)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const text = await parseErrorText(response);
+        throw new Error(text || `delete entitlement failed (${response.status})`);
+      }
+      pushToast({ type: "success", message: "权益已删除" });
+      await refreshPlanEntitlements(selectedPlanId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushToast({ type: "error", message: "删除权益失败", detail: message });
+    } finally {
+      setEntitlementBusy(false);
+    }
+  };
+
+  const bindUserPlan = async () => {
+    if (!saasAdminEnabled) {
+      pushToast({ type: "error", message: "SaaS 管理未开启", detail: saasHint || "请先开启 FEATURE_SAAS_ADMIN_API" });
+      return;
+    }
+    const username = bindForm.username.trim();
+    if (!username) {
+      pushToast({ type: "error", message: "用户名不能为空" });
+      return;
+    }
+    const planId = bindForm.planId || selectedPlanId;
+    if (!planId) {
+      pushToast({ type: "error", message: "请选择套餐" });
+      return;
+    }
+    let durationDays: number | undefined;
+    const rawDuration = bindForm.durationDays.trim();
+    if (rawDuration) {
+      const parsed = Number.parseInt(rawDuration, 10);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        pushToast({ type: "error", message: "duration_days 无效", detail: "必须是正整数" });
+        return;
+      }
+      durationDays = parsed;
+    }
+    try {
+      setBindBusy(true);
+      const payload: Record<string, unknown> = {
+        plan_id: planId,
+        auto_renew: bindForm.autoRenew,
+      };
+      if (durationDays !== undefined) payload.duration_days = durationDays;
+      const response = await apiFetch(`/admin/saas/users/${encodeURIComponent(username)}/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const text = await parseErrorText(response);
+        throw new Error(text || `bind plan failed (${response.status})`);
+      }
+      const data = (await response.json()) as BillingSubscriptionSnapshot;
+      pushToast({
+        type: "success",
+        message: "用户套餐绑定成功",
+        detail: `${username} -> ${data.plan_name || data.plan_code || planId}`,
+      });
+      setBindForm((prev) => ({ ...prev, username: "", durationDays: "" }));
+      if (tab === "users") {
+        await refresh();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushToast({ type: "error", message: "绑定套餐失败", detail: message });
+    } finally {
+      setBindBusy(false);
+    }
   };
 
   const openAuditDetail = async (logId: string) => {
@@ -2284,15 +2774,19 @@ function AdminBillingPage({
           <div className="detail-head-left">
             <div>
               <div className="section-title">Billing Admin</div>
-              <div className="section-sub">定价配置、订单查询、审计日志（金融级留痕）。</div>
+              <div className="section-sub">套餐配置、权益管理、用户绑定、订单审计。</div>
             </div>
             <div className="row-actions">
+              <span className={`pill ${saasAdminEnabled ? "pill-success" : "pill-warn"}`}>
+                {saasAdminEnabled ? "SaaS 管理已开启" : "SaaS 管理未开启"}
+              </span>
               <button className="ghost" type="button" onClick={refresh} disabled={busy}>
                 {busy ? "刷新中…" : "刷新"}
               </button>
             </div>
           </div>
         </div>
+        {!saasAdminEnabled && saasHint ? <div className="muted">{saasHint}</div> : null}
         <div className="tabs" role="tablist" aria-label="Billing admin tabs">
           {(
             [
@@ -2323,17 +2817,21 @@ function AdminBillingPage({
         <div className="card table-card">
           <div className="table billing-admin-table billing-plan-table">
             <div className="table-header">
-              <div className="cell">Code</div>
-              <div className="cell">Name</div>
-              <div className="cell">Price</div>
-              <div className="cell">Points</div>
-              <div className="cell">Active</div>
-              <div className="cell">Actions</div>
+              <div className="cell">代号</div>
+              <div className="cell">名称</div>
+              <div className="cell">周期</div>
+              <div className="cell">试用</div>
+              <div className="cell">价格</div>
+              <div className="cell">积分</div>
+              <div className="cell">状态</div>
+              <div className="cell">操作</div>
             </div>
             {plans.map((plan) => (
               <div className="table-row" key={plan.plan_id}>
                 <div className="cell mono">{plan.code}</div>
                 <div className="cell">{plan.name}</div>
+                <div className="cell mono">{plan.billing_cycle || "-"}</div>
+                <div className="cell mono">{plan.trial_days == null ? "-" : plan.trial_days}</div>
                 <div className="cell mono">{plan.price_cents}</div>
                 <div className="cell mono">{plan.monthly_points}</div>
                 <div className="cell">{plan.active ? <span className="pill pill-success">Yes</span> : <span className="pill pill-danger">No</span>}</div>
@@ -2360,6 +2858,28 @@ function AdminBillingPage({
                   >
                     {savingPlanId === plan.plan_id ? "保存中…" : "保存价格"}
                   </button>
+                  <input
+                    className="admin-inline-input mono"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={planPointsDrafts[plan.plan_id] ?? String(plan.monthly_points)}
+                    onChange={(event) =>
+                      setPlanPointsDrafts((prev) => ({
+                        ...prev,
+                        [plan.plan_id]: event.target.value,
+                      }))
+                    }
+                    aria-label={`points-${plan.code}`}
+                  />
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={() => savePlanPoints(plan)}
+                    disabled={savingPlanId === plan.plan_id}
+                  >
+                    {savingPlanId === plan.plan_id ? "保存中…" : "保存积分"}
+                  </button>
                   <button
                     className="ghost"
                     type="button"
@@ -2372,11 +2892,217 @@ function AdminBillingPage({
             ))}
             {!plans.length ? <div className="muted">暂无套餐</div> : null}
           </div>
+          {saasAdminEnabled ? (
+            <>
+              <div className="recommend-section-head">
+                <div>
+                  <div className="section-title">套餐权益管理</div>
+                  <div className="muted">查看并调整当前套餐的 entitlement key/limit/enabled。</div>
+                </div>
+              </div>
+              <div className="filters-panel">
+                <label className="field">
+                  <span>套餐</span>
+                  <select
+                    value={selectedPlanId}
+                    onChange={(event) => setSelectedPlanId(event.target.value)}
+                    disabled={!plans.length}
+                  >
+                    {plans.map((item) => (
+                      <option key={item.plan_id} value={item.plan_id}>
+                        {item.name} ({item.code})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="row-actions">
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={() => {
+                      if (!selectedPlanId) return;
+                      void refreshPlanEntitlements(selectedPlanId);
+                    }}
+                    disabled={!selectedPlanId || entitlementBusy}
+                  >
+                    刷新权益
+                  </button>
+                </div>
+              </div>
+              <div className="filters-panel">
+                <label className="field">
+                  <span>Key</span>
+                  <input
+                    value={entitlementForm.key}
+                    onChange={(event) =>
+                      setEntitlementForm((prev) => ({ ...prev, key: event.target.value }))
+                    }
+                    placeholder="feature.deep_search"
+                  />
+                </label>
+                <label className="field">
+                  <span>Limit</span>
+                  <input
+                    value={entitlementForm.limit}
+                    onChange={(event) =>
+                      setEntitlementForm((prev) => ({ ...prev, limit: event.target.value }))
+                    }
+                    placeholder="300"
+                  />
+                </label>
+                <label className="field field-checkbox">
+                  <span>Enabled</span>
+                  <input
+                    type="checkbox"
+                    checked={entitlementForm.enabled}
+                    onChange={(event) =>
+                      setEntitlementForm((prev) => ({ ...prev, enabled: event.target.checked }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>Value JSON</span>
+                  <textarea
+                    rows={2}
+                    value={entitlementForm.valueJson}
+                    onChange={(event) =>
+                      setEntitlementForm((prev) => ({ ...prev, valueJson: event.target.value }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span>Metadata JSON</span>
+                  <textarea
+                    rows={2}
+                    value={entitlementForm.metadataJson}
+                    onChange={(event) =>
+                      setEntitlementForm((prev) => ({ ...prev, metadataJson: event.target.value }))
+                    }
+                  />
+                </label>
+                <div className="row-actions">
+                  <button
+                    className="primary"
+                    type="button"
+                    onClick={createEntitlement}
+                    disabled={!selectedPlanId || entitlementBusy}
+                  >
+                    {entitlementBusy ? "提交中…" : "新增权益"}
+                  </button>
+                </div>
+              </div>
+              <div className="table billing-admin-table billing-entitlement-table">
+                <div className="table-header">
+                  <div className="cell">权限键</div>
+                  <div className="cell">启用</div>
+                  <div className="cell">限额</div>
+                  <div className="cell">值</div>
+                  <div className="cell">元数据</div>
+                  <div className="cell">操作</div>
+                </div>
+                {planEntitlements.map((item) => (
+                  <div className="table-row" key={item.entitlement_id}>
+                    <div className="cell mono">{item.key}</div>
+                    <div className="cell">
+                      <span className={`pill ${item.enabled ? "pill-success" : "pill-danger"}`}>
+                        {item.enabled ? "enabled" : "disabled"}
+                      </span>
+                    </div>
+                    <div className="cell row-actions">
+                      <input
+                        className="admin-inline-input mono"
+                        value={entitlementLimitDrafts[item.entitlement_id] ?? ""}
+                        onChange={(event) =>
+                          setEntitlementLimitDrafts((prev) => ({
+                            ...prev,
+                            [item.entitlement_id]: event.target.value,
+                          }))
+                        }
+                        placeholder="-"
+                      />
+                      <button className="ghost" type="button" onClick={() => saveEntitlementLimit(item)} disabled={entitlementBusy}>
+                        保存
+                      </button>
+                    </div>
+                    <div className="cell mono">
+                      <pre className="code-block">{JSON.stringify(item.value ?? null, null, 2)}</pre>
+                    </div>
+                    <div className="cell mono">
+                      <pre className="code-block">{JSON.stringify(item.metadata ?? {}, null, 2)}</pre>
+                    </div>
+                    <div className="cell row-actions">
+                      <button className="ghost" type="button" onClick={() => toggleEntitlement(item)} disabled={entitlementBusy}>
+                        {item.enabled ? "禁用" : "启用"}
+                      </button>
+                      <button className="ghost" type="button" onClick={() => deleteEntitlement(item)} disabled={entitlementBusy}>
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {!planEntitlements.length ? <div className="muted">当前套餐暂无权益配置</div> : null}
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
 
       {tab === "users" ? (
         <>
+          {saasAdminEnabled ? (
+            <div className="card">
+              <div className="section-title">手动绑定套餐</div>
+              <div className="filters-panel">
+                <label className="field">
+                  <span>用户名</span>
+                  <input
+                    value={bindForm.username}
+                    onChange={(event) => setBindForm((prev) => ({ ...prev, username: event.target.value }))}
+                    placeholder="alice"
+                  />
+                </label>
+                <label className="field">
+                  <span>套餐</span>
+                  <select
+                    value={bindForm.planId}
+                    onChange={(event) => setBindForm((prev) => ({ ...prev, planId: event.target.value }))}
+                    disabled={!plans.length}
+                  >
+                    {plans.map((item) => (
+                      <option key={item.plan_id} value={item.plan_id}>
+                        {item.name} ({item.code})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Duration Days（可空）</span>
+                  <input
+                    value={bindForm.durationDays}
+                    onChange={(event) => setBindForm((prev) => ({ ...prev, durationDays: event.target.value }))}
+                    placeholder="30"
+                  />
+                </label>
+                <label className="field field-checkbox">
+                  <span>Auto Renew</span>
+                  <input
+                    type="checkbox"
+                    checked={bindForm.autoRenew}
+                    onChange={(event) => setBindForm((prev) => ({ ...prev, autoRenew: event.target.checked }))}
+                  />
+                </label>
+                <div className="row-actions">
+                  <button className="primary" type="button" onClick={bindUserPlan} disabled={bindBusy || !plans.length}>
+                    {bindBusy ? "绑定中…" : "绑定套餐"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="card">
+              <div className="muted">{saasHint || "SaaS 管理开关未开启，当前仅支持订阅查询。"} </div>
+            </div>
+          )}
           <div className="card">
             <div className="filters-panel">
               <label className="field">
@@ -2405,14 +3131,14 @@ function AdminBillingPage({
           <div className="card table-card">
             <div className="table billing-admin-table billing-user-table">
               <div className="table-header">
-                <div className="cell">User</div>
-                <div className="cell">Role</div>
-                <div className="cell">Tenant</div>
-                <div className="cell">Account</div>
-                <div className="cell">Plan</div>
-                <div className="cell">Expire At</div>
-                <div className="cell">Points</div>
-                <div className="cell">Sub Status</div>
+                <div className="cell">用户</div>
+                <div className="cell">角色</div>
+                <div className="cell">租户</div>
+                <div className="cell">账号</div>
+                <div className="cell">套餐</div>
+                <div className="cell">到期</div>
+                <div className="cell">积分</div>
+                <div className="cell">订阅状态</div>
               </div>
               {userBilling.map((item) => (
                 <div className="table-row" key={item.username}>
@@ -2445,12 +3171,12 @@ function AdminBillingPage({
         <div className="card table-card">
           <div className="table billing-admin-table billing-order-table">
             <div className="table-header">
-              <div className="cell">Created</div>
-              <div className="cell">User</div>
-              <div className="cell">Plan</div>
-              <div className="cell">Amount</div>
-              <div className="cell">Status</div>
-              <div className="cell">External</div>
+              <div className="cell">创建时间</div>
+              <div className="cell">用户</div>
+              <div className="cell">套餐</div>
+              <div className="cell">金额</div>
+              <div className="cell">状态</div>
+              <div className="cell">外部订单</div>
             </div>
             {orders.map((order) => (
               <div className="table-row" key={order.order_id}>
@@ -2511,12 +3237,12 @@ function AdminBillingPage({
           <div className="card table-card">
             <div className="table billing-admin-table billing-audit-table">
               <div className="table-header">
-                <div className="cell">Time</div>
-                <div className="cell">Provider</div>
-                <div className="cell">Event</div>
-                <div className="cell">External</div>
-                <div className="cell">Sig</div>
-                <div className="cell">Outcome</div>
+                <div className="cell">时间</div>
+                <div className="cell">提供商</div>
+                <div className="cell">事件</div>
+                <div className="cell">外部标识</div>
+                <div className="cell">签名</div>
+                <div className="cell">结果</div>
               </div>
               {audit.map((log) => (
                 <div className="table-row is-clickable" key={log.log_id} onClick={() => openAuditDetail(log.log_id)}>
@@ -2897,7 +3623,13 @@ function App() {
         </header>
         <main className="main">
           {toast ? <ToastBanner toast={toast} onClose={() => setToast(null)} /> : null}
-          {authStatus !== "authenticated" ? (
+          {route.type === "terms" ? (
+            <LegalTermsPage navigate={navigate} />
+          ) : route.type === "privacy" ? (
+            <LegalPrivacyPage navigate={navigate} />
+          ) : route.type === "refund" ? (
+            <LegalRefundPage navigate={navigate} />
+          ) : authStatus !== "authenticated" ? (
             <LoginScreen status={authStatus} apiBase={API_BASE} onLogin={login} onRegister={register} />
           ) : route.type === "admin_billing" && !hasAdminAccess(user?.role || "") ? (
             <AccessDeniedCard
@@ -2909,7 +3641,7 @@ function App() {
           ) : route.type === "workspace" ? (
             <TenantWorkspacePage apiFetch={apiFetch} role={user?.role || "user"} pushToast={pushToast} />
           ) : route.type === "billing" ? (
-            <BillingPage apiFetch={apiFetch} role={user?.role || "user"} pushToast={pushToast} />
+            <BillingPage apiFetch={apiFetch} role={user?.role || "user"} pushToast={pushToast} navigate={navigate} />
           ) : route.type === "admin_billing" ? (
             <AdminBillingPage apiFetch={apiFetch} role={user?.role || "user"} pushToast={pushToast} />
           ) : route.type === "create" ? (
@@ -6486,6 +7218,148 @@ function LogPanel({
         <div ref={bottomRef} />
       </div>
     </div>
+  );
+}
+
+/* ─── Legal pages (accessible without login) ─── */
+
+function LegalTermsPage({ navigate }: { navigate: (path: string) => void }) {
+  return (
+    <div className="create-grid">
+      <div className="card card-hero">
+        <h2 className="section-title">服务条款</h2>
+        <p className="section-sub">AntiHub 平台服务条款</p>
+      </div>
+      <div className="card legal-content">
+        <h3>1. 服务说明</h3>
+        <p>AntiHub 是一个面向开发者的智能文档与项目分析平台。用户通过注册账号并选择相应的订阅套餐来使用平台提供的各项服务。</p>
+
+        <h3>2. 账号与使用</h3>
+        <p>用户须使用真实信息注册，并对账号下的所有活动承担责任。禁止将服务用于任何违反法律法规的用途。</p>
+
+        <h3>3. 付费与订阅</h3>
+        <p>平台提供多种订阅套餐，用户可通过微信扫码支付开通。具体价格与权益以购买页面展示为准。积分一经充值到账，不因套餐变更而失效。</p>
+
+        <h3>4. 知识产权</h3>
+        <p>用户上传和生成的文档内容归用户所有。平台技术、界面、品牌等知识产权归 AntiHub 团队所有。</p>
+
+        <h3>5. 免责声明</h3>
+        <p>平台按"现状"提供服务，不对因网络故障、系统维护或不可抗力导致的服务中断承担责任。平台生成的分析结果仅供参考。</p>
+
+        <h3>6. 条款变更</h3>
+        <p>AntiHub 团队保留随时修改本条款的权利，变更后将在平台公告。继续使用平台即视为同意修改后的条款。</p>
+
+        <h3>7. 联系我们</h3>
+        <p>如有疑问，请联系客服邮箱：<a href="mailto:3193773138@qq.com">3193773138@qq.com</a></p>
+
+        <p className="muted legal-placeholder-note">本文档为首发占位版本，正式条款以后续更新为准。</p>
+      </div>
+      <LegalFooter navigate={navigate} />
+    </div>
+  );
+}
+
+function LegalPrivacyPage({ navigate }: { navigate: (path: string) => void }) {
+  return (
+    <div className="create-grid">
+      <div className="card card-hero">
+        <h2 className="section-title">隐私政策</h2>
+        <p className="section-sub">AntiHub 平台隐私保护说明</p>
+      </div>
+      <div className="card legal-content">
+        <h3>1. 信息收集</h3>
+        <p>我们在您注册和使用服务时收集必要的信息，包括：用户名、邮箱地址、支付记录以及使用平台过程中产生的操作日志。</p>
+
+        <h3>2. 信息使用</h3>
+        <p>收集的信息仅用于：提供和改进服务、处理支付与订阅、发送服务相关通知、保障平台安全。我们不会将您的个人信息出售给第三方。</p>
+
+        <h3>3. 信息存储与保护</h3>
+        <p>您的数据存储于安全的服务器环境，我们采取合理的技术和管理措施保护您的信息安全。但请理解，互联网传输不能保证绝对安全。</p>
+
+        <h3>4. 信息共享</h3>
+        <p>除以下情况外，我们不会向第三方共享您的个人信息：法律法规要求、支付服务处理（微信支付）、经您明确同意。</p>
+
+        <h3>5. 用户权利</h3>
+        <p>您有权访问、更正或删除您的个人信息。如需操作，请联系客服。注销账号后，我们将在合理期限内删除您的个人数据。</p>
+
+        <h3>6. Cookie 使用</h3>
+        <p>平台使用必要的本地存储（localStorage）来维持登录状态和偏好设置。</p>
+
+        <h3>7. 政策更新</h3>
+        <p>本隐私政策可能不定期更新，更新后将在平台公告。</p>
+
+        <h3>8. 联系方式</h3>
+        <p>隐私相关问题请联系：<a href="mailto:3193773138@qq.com">3193773138@qq.com</a></p>
+
+        <p className="muted legal-placeholder-note">本文档为首发占位版本，正式条款以后续更新为准。</p>
+      </div>
+      <LegalFooter navigate={navigate} />
+    </div>
+  );
+}
+
+function LegalRefundPage({ navigate }: { navigate: (path: string) => void }) {
+  return (
+    <div className="create-grid">
+      <div className="card card-hero">
+        <h2 className="section-title">退款政策</h2>
+        <p className="section-sub">AntiHub 平台退款与售后说明</p>
+      </div>
+      <div className="card legal-content">
+        <h3>1. 退款适用范围</h3>
+        <p>以下情况可申请退款：</p>
+        <ul>
+          <li>支付成功但积分未到账（系统故障导致）</li>
+          <li>重复支付同一订单</li>
+          <li>支付后 24 小时内未使用任何积分，可申请全额退款</li>
+        </ul>
+
+        <h3>2. 不予退款的情况</h3>
+        <ul>
+          <li>积分已部分或全部消耗</li>
+          <li>购买超过 7 天且已使用服务</li>
+          <li>因用户自身原因（如违规）导致账号受限</li>
+        </ul>
+
+        <h3>3. 退款流程</h3>
+        <p>请发送退款申请至客服邮箱 <a href="mailto:3193773138@qq.com">3193773138@qq.com</a>，邮件中请注明：</p>
+        <ul>
+          <li>注册用户名</li>
+          <li>订单编号</li>
+          <li>支付金额与时间</li>
+          <li>退款原因</li>
+        </ul>
+
+        <h3>4. 处理时效</h3>
+        <p>我们将在收到申请后 3 个工作日内审核并回复。审核通过后，退款将在 5-10 个工作日内原路返回。</p>
+
+        <h3>5. 联系方式</h3>
+        <p>退款及售后问题请联系：<a href="mailto:3193773138@qq.com">3193773138@qq.com</a></p>
+
+        <p className="muted legal-placeholder-note">本文档为首发占位版本，正式条款以后续更新为准。</p>
+      </div>
+      <LegalFooter navigate={navigate} />
+    </div>
+  );
+}
+
+function LegalFooter({ navigate }: { navigate: (path: string) => void }) {
+  return (
+    <footer className="site-footer">
+      <div className="site-footer-inner">
+        <div className="site-footer-links">
+          <button type="button" className="text-link" onClick={() => navigate("/terms")}>服务条款</button>
+          <span className="site-footer-sep">|</span>
+          <button type="button" className="text-link" onClick={() => navigate("/privacy")}>隐私政策</button>
+          <span className="site-footer-sep">|</span>
+          <button type="button" className="text-link" onClick={() => navigate("/refund")}>退款政策</button>
+        </div>
+        <div className="site-footer-contact">
+          客服邮箱：<a href="mailto:3193773138@qq.com">3193773138@qq.com</a>
+        </div>
+        <div className="site-footer-copy">&copy; {new Date().getFullYear()} AntiHub 团队</div>
+      </div>
+    </footer>
   );
 }
 

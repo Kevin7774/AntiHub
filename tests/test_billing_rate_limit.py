@@ -69,14 +69,18 @@ def test_recommendations_rate_limit(monkeypatch) -> None:
         assert third.headers.get("Retry-After") is not None
 
 
-def test_rate_limiter_requires_redis_in_production(monkeypatch) -> None:
+def test_rate_limiter_degrades_to_memory_in_production(monkeypatch) -> None:
+    """When Redis is unavailable in production, limiter should degrade to in-memory (not crash)."""
     import billing.middleware as billing_middleware
 
     monkeypatch.setattr(billing_middleware, "APP_ENV", "production")
     monkeypatch.setattr(billing_middleware, "REDIS_DISABLED", True)
     monkeypatch.setattr(billing_middleware, "REDIS_URL", "memory://")
-    with pytest.raises(RuntimeError, match="Redis"):
-        billing_middleware.BillingRateLimiter()
+    limiter = billing_middleware.BillingRateLimiter()
+    assert limiter._client is None  # no redis
+    # In-memory fallback should still work
+    result = limiter.allow(subject="test:prod", limit_rpm=10)
+    assert result.allowed is True
 
 
 def test_recommendations_rate_limit_returns_503_when_unavailable(monkeypatch) -> None:

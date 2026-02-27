@@ -10,9 +10,10 @@ __pycache__/
 venv/
 venv-local/
 
-# Logs / temp
+# Logs / temp / backups
 logs/
 *.log
+*.bak*
 
 # OS / Editor
 .DS_Store
@@ -44,3 +45,10 @@ playwright-report/
 
 # PostgreSQL / Redis data volumes
 data/
+
+# Payment certificates / private keys (NEVER commit)
+certs/
+*.pem
+*.key
+*.p12
+*.pfx

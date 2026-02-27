@@ -469,6 +469,12 @@ async def lifespan(_: FastAPI):
     if AUTH_ENABLED:
         if not AUTH_TOKEN_SECRET:
             raise RuntimeError("AUTH_TOKEN_SECRET is required when AUTH_ENABLED=true")
+    if str(APP_ENV or "").strip().lower() in {"prod", "production"}:
+        if str(PAYMENT_PROVIDER or "").strip().lower() == "stripe":
+            raise RuntimeError(
+                "PAYMENT_PROVIDER=stripe is not supported for production launch. "
+                "Set PAYMENT_PROVIDER=wechatpay (or mock for testing)."
+            )
     if STARTUP_BOOTSTRAP_ENABLED:
         init_billing_db()
         init_decision_db()
@@ -506,10 +512,9 @@ PUBLIC_AUTH_PATHS = {
     "/auth/register",
     "/billing/webhooks/payment",
     "/billing/webhooks/wechatpay",
-    "/docs",
-    "/redoc",
-    "/openapi.json",
 }
+
+_IS_PRODUCTION = str(APP_ENV or "").strip().lower() in {"prod", "production"}
 
 BILLING_RATE_LIMITER = BillingRateLimiter()
 
@@ -539,14 +544,19 @@ def _normalize_request_path(path: str) -> str:
 
 
 def _is_public_path(path: str) -> bool:
-    path = _normalize_request_path(path)
-    # ✅ auth endpoints must be public
-    if path in {"/login", "/register", "/openapi.json", "/docs", "/redoc"}:
-        return True
     normalized = _normalize_request_path(path)
+    # Auth endpoints are always public
+    if normalized in {"/login", "/register"}:
+        return True
     if normalized in PUBLIC_AUTH_PATHS:
         return True
-    return normalized.startswith("/docs/") or normalized.startswith("/redoc/")
+    # Swagger / OpenAPI docs: public in dev, gated in production
+    if not _IS_PRODUCTION:
+        if normalized in {"/docs", "/redoc", "/openapi.json"}:
+            return True
+        if normalized.startswith("/docs/") or normalized.startswith("/redoc/"):
+            return True
+    return False
 
 
 def _should_rate_limit_recommendation(request: Request) -> bool:
@@ -1578,7 +1588,7 @@ class BillingPlanCreateRequest(BaseModel):
     code: str = Field(..., min_length=1, max_length=64, pattern=PLAN_CODE_PATTERN)
     name: str = Field(..., min_length=1, max_length=120)
     description: Optional[str] = Field(default=None, max_length=2000)
-    currency: str = Field(default="usd", min_length=3, max_length=3, pattern=CURRENCY_PATTERN)
+    currency: str = Field(default="cny", min_length=3, max_length=3, pattern=CURRENCY_PATTERN)
     price_cents: int = Field(0, ge=0, le=100_000_000_00)
     monthly_points: int = Field(0, ge=0, le=100_000_000)
     billing_cycle: str = Field(default="monthly", min_length=1, max_length=16)
@@ -2838,6 +2848,11 @@ async def health_billing() -> dict:
     internal_ready = bool(PAYMENT_WEBHOOK_SECRET)
     if not internal_ready:
         report["details"]["PAYMENT_WEBHOOK_SECRET"] = False
+
+    if str(PAYMENT_PROVIDER or "").strip().lower() == "stripe":
+        report["details"]["stripe"] = "StripeProvider is not implemented; set PAYMENT_PROVIDER=wechatpay or mock"
+        report["config"] = "error"
+        report["status"] = "error"
 
     wechat_checkout_ready = True
     if str(PAYMENT_PROVIDER or "").strip().lower() == "wechatpay":
