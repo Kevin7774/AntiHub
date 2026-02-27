@@ -845,7 +845,12 @@ button:disabled {
 
 .billing-plan-table .table-header,
 .billing-plan-table .table-row {
-  grid-template-columns: 1fr 1.5fr 1fr 1fr 0.9fr 2.7fr;
+  grid-template-columns: 1fr 1.3fr 0.9fr 0.8fr 0.9fr 0.9fr 0.8fr 3.2fr;
+}
+
+.billing-entitlement-table .table-header,
+.billing-entitlement-table .table-row {
+  grid-template-columns: 1.3fr 0.8fr 1.1fr 1.8fr 1.6fr 1.4fr;
 }
 
 .billing-user-table .table-header,
@@ -4545,7 +4550,9 @@ button:disabled {
   .billing-order-table .table-header,
   .billing-order-table .table-row,
   .billing-audit-table .table-header,
-  .billing-audit-table .table-row {
+  .billing-audit-table .table-row,
+  .billing-entitlement-table .table-header,
+  .billing-entitlement-table .table-row {
     grid-template-columns: 1fr;
   }
 
@@ -4566,4 +4573,112 @@ button:disabled {
   .local-deploy-panel {
     max-width: 210px;
   }
+
+  .site-footer-links {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .site-footer-sep {
+    display: none;
+  }
+}
+
+/* ─── Legal pages ─── */
+
+.legal-content {
+  line-height: 1.8;
+  font-size: 0.95rem;
+}
+
+.legal-content h3 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+}
+
+.legal-content p,
+.legal-content ul {
+  margin: 0.4rem 0;
+}
+
+.legal-content ul {
+  padding-left: 1.5rem;
+}
+
+.legal-content li {
+  margin: 0.25rem 0;
+}
+
+.legal-content a {
+  color: var(--accent-warm);
+}
+
+.legal-placeholder-note {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 0.85em;
+  font-style: italic;
+}
+
+/* ─── Site footer ─── */
+
+.site-footer {
+  margin-top: 2rem;
+  padding: 1.5rem 0 0.5rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.site-footer-inner {
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.site-footer-links {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.site-footer-links .text-link {
+  font-size: 0.82rem;
+}
+
+.site-footer-sep {
+  opacity: 0.4;
+}
+
+.site-footer-contact {
+  margin-top: 0.4rem;
+}
+
+.site-footer-contact a {
+  color: var(--accent-warm);
+}
+
+.site-footer-copy {
+  margin-top: 0.3rem;
+  opacity: 0.6;
+}
+
+/* ─── Trust hint ─── */
+
+.trust-hint {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.trust-hint a {
+  color: var(--accent-warm);
+}
+
+.trust-hint .text-link {
+  font-size: 0.78rem;
+  color: var(--accent-warm);
 }

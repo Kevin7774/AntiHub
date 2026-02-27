@@ -6,7 +6,10 @@ export type Route =
     }
   | { type: "workspace" }
   | { type: "billing" }
-  | { type: "admin_billing" };
+  | { type: "admin_billing" }
+  | { type: "terms" }
+  | { type: "privacy" }
+  | { type: "refund" };
 
 export type DocHeading = {
   id: string;
@@ -67,6 +70,15 @@ export function parseRoute(pathname: string): Route {
   }
   if (pathname.startsWith("/billing")) {
     return { type: "billing" };
+  }
+  if (pathname.startsWith("/terms")) {
+    return { type: "terms" };
+  }
+  if (pathname.startsWith("/privacy")) {
+    return { type: "privacy" };
+  }
+  if (pathname.startsWith("/refund")) {
+    return { type: "refund" };
   }
   if (pathname.startsWith("/create")) {
     return { type: "create" };

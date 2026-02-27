@@ -1498,10 +1498,12 @@ function BillingPage({
   apiFetch,
   role,
   pushToast,
+  navigate,
 }: {
   apiFetch: (path: string, init?: RequestInit) => Promise<Response>;
   role: string;
   pushToast: (toast: Toast) => void;
+  navigate: (path: string) => void;
 }) {
   const [plans, setPlans] = useState<BillingPlan[]>(() => cloneBillingFallbackPlans());
   const [subscription, setSubscription] = useState<BillingSubscriptionSnapshot | null>(null);
@@ -1686,6 +1688,11 @@ function BillingPage({
           <div>
             <div className="section-title">升级套餐</div>
             <div className="muted">扫码支付开通会员，支付成功后积分即时到账。</div>
+            <div className="trust-hint">
+              安全支付 · 微信官方通道 · 如需帮助请联系 <a href="mailto:3193773138@qq.com">3193773138@qq.com</a>
+              {" · "}
+              <button type="button" className="text-link" onClick={() => navigate("/refund")}>退款政策</button>
+            </div>
           </div>
         </div>
         {hasAdminAccess(role) ? (
@@ -1754,9 +1761,7 @@ function BillingPage({
         </div>
       </div>
 
-      <div className="muted" style={{ marginTop: "1rem", fontSize: "0.85em" }}>
-        如需帮助，请联系客服：3193773138@qq.com
-      </div>
+      <LegalFooter navigate={navigate} />
 
       <PaymentModal
         open={modalState.open}
@@ -3597,7 +3602,13 @@ function App() {
         </header>
         <main className="main">
           {toast ? <ToastBanner toast={toast} onClose={() => setToast(null)} /> : null}
-          {authStatus !== "authenticated" ? (
+          {route.type === "terms" ? (
+            <LegalTermsPage navigate={navigate} />
+          ) : route.type === "privacy" ? (
+            <LegalPrivacyPage navigate={navigate} />
+          ) : route.type === "refund" ? (
+            <LegalRefundPage navigate={navigate} />
+          ) : authStatus !== "authenticated" ? (
             <LoginScreen status={authStatus} apiBase={API_BASE} onLogin={login} onRegister={register} />
           ) : route.type === "admin_billing" && !hasAdminAccess(user?.role || "") ? (
             <AccessDeniedCard
@@ -3609,7 +3620,7 @@ function App() {
           ) : route.type === "workspace" ? (
             <TenantWorkspacePage apiFetch={apiFetch} role={user?.role || "user"} pushToast={pushToast} />
           ) : route.type === "billing" ? (
-            <BillingPage apiFetch={apiFetch} role={user?.role || "user"} pushToast={pushToast} />
+            <BillingPage apiFetch={apiFetch} role={user?.role || "user"} pushToast={pushToast} navigate={navigate} />
           ) : route.type === "admin_billing" ? (
             <AdminBillingPage apiFetch={apiFetch} role={user?.role || "user"} pushToast={pushToast} />
           ) : route.type === "create" ? (
@@ -7186,6 +7197,148 @@ function LogPanel({
         <div ref={bottomRef} />
       </div>
     </div>
+  );
+}
+
+/* ─── Legal pages (accessible without login) ─── */
+
+function LegalTermsPage({ navigate }: { navigate: (path: string) => void }) {
+  return (
+    <div className="create-grid">
+      <div className="card card-hero">
+        <h2 className="section-title">服务条款</h2>
+        <p className="section-sub">AntiHub 平台服务条款</p>
+      </div>
+      <div className="card legal-content">
+        <h3>1. 服务说明</h3>
+        <p>AntiHub 是一个面向开发者的智能文档与项目分析平台。用户通过注册账号并选择相应的订阅套餐来使用平台提供的各项服务。</p>
+
+        <h3>2. 账号与使用</h3>
+        <p>用户须使用真实信息注册，并对账号下的所有活动承担责任。禁止将服务用于任何违反法律法规的用途。</p>
+
+        <h3>3. 付费与订阅</h3>
+        <p>平台提供多种订阅套餐，用户可通过微信扫码支付开通。具体价格与权益以购买页面展示为准。积分一经充值到账，不因套餐变更而失效。</p>
+
+        <h3>4. 知识产权</h3>
+        <p>用户上传和生成的文档内容归用户所有。平台技术、界面、品牌等知识产权归 AntiHub 团队所有。</p>
+
+        <h3>5. 免责声明</h3>
+        <p>平台按"现状"提供服务，不对因网络故障、系统维护或不可抗力导致的服务中断承担责任。平台生成的分析结果仅供参考。</p>
+
+        <h3>6. 条款变更</h3>
+        <p>AntiHub 团队保留随时修改本条款的权利，变更后将在平台公告。继续使用平台即视为同意修改后的条款。</p>
+
+        <h3>7. 联系我们</h3>
+        <p>如有疑问，请联系客服邮箱：<a href="mailto:3193773138@qq.com">3193773138@qq.com</a></p>
+
+        <p className="muted legal-placeholder-note">本文档为首发占位版本，正式条款以后续更新为准。</p>
+      </div>
+      <LegalFooter navigate={navigate} />
+    </div>
+  );
+}
+
+function LegalPrivacyPage({ navigate }: { navigate: (path: string) => void }) {
+  return (
+    <div className="create-grid">
+      <div className="card card-hero">
+        <h2 className="section-title">隐私政策</h2>
+        <p className="section-sub">AntiHub 平台隐私保护说明</p>
+      </div>
+      <div className="card legal-content">
+        <h3>1. 信息收集</h3>
+        <p>我们在您注册和使用服务时收集必要的信息，包括：用户名、邮箱地址、支付记录以及使用平台过程中产生的操作日志。</p>
+
+        <h3>2. 信息使用</h3>
+        <p>收集的信息仅用于：提供和改进服务、处理支付与订阅、发送服务相关通知、保障平台安全。我们不会将您的个人信息出售给第三方。</p>
+
+        <h3>3. 信息存储与保护</h3>
+        <p>您的数据存储于安全的服务器环境，我们采取合理的技术和管理措施保护您的信息安全。但请理解，互联网传输不能保证绝对安全。</p>
+
+        <h3>4. 信息共享</h3>
+        <p>除以下情况外，我们不会向第三方共享您的个人信息：法律法规要求、支付服务处理（微信支付）、经您明确同意。</p>
+
+        <h3>5. 用户权利</h3>
+        <p>您有权访问、更正或删除您的个人信息。如需操作，请联系客服。注销账号后，我们将在合理期限内删除您的个人数据。</p>
+
+        <h3>6. Cookie 使用</h3>
+        <p>平台使用必要的本地存储（localStorage）来维持登录状态和偏好设置。</p>
+
+        <h3>7. 政策更新</h3>
+        <p>本隐私政策可能不定期更新，更新后将在平台公告。</p>
+
+        <h3>8. 联系方式</h3>
+        <p>隐私相关问题请联系：<a href="mailto:3193773138@qq.com">3193773138@qq.com</a></p>
+
+        <p className="muted legal-placeholder-note">本文档为首发占位版本，正式条款以后续更新为准。</p>
+      </div>
+      <LegalFooter navigate={navigate} />
+    </div>
+  );
+}
+
+function LegalRefundPage({ navigate }: { navigate: (path: string) => void }) {
+  return (
+    <div className="create-grid">
+      <div className="card card-hero">
+        <h2 className="section-title">退款政策</h2>
+        <p className="section-sub">AntiHub 平台退款与售后说明</p>
+      </div>
+      <div className="card legal-content">
+        <h3>1. 退款适用范围</h3>
+        <p>以下情况可申请退款：</p>
+        <ul>
+          <li>支付成功但积分未到账（系统故障导致）</li>
+          <li>重复支付同一订单</li>
+          <li>支付后 24 小时内未使用任何积分，可申请全额退款</li>
+        </ul>
+
+        <h3>2. 不予退款的情况</h3>
+        <ul>
+          <li>积分已部分或全部消耗</li>
+          <li>购买超过 7 天且已使用服务</li>
+          <li>因用户自身原因（如违规）导致账号受限</li>
+        </ul>
+
+        <h3>3. 退款流程</h3>
+        <p>请发送退款申请至客服邮箱 <a href="mailto:3193773138@qq.com">3193773138@qq.com</a>，邮件中请注明：</p>
+        <ul>
+          <li>注册用户名</li>
+          <li>订单编号</li>
+          <li>支付金额与时间</li>
+          <li>退款原因</li>
+        </ul>
+
+        <h3>4. 处理时效</h3>
+        <p>我们将在收到申请后 3 个工作日内审核并回复。审核通过后，退款将在 5-10 个工作日内原路返回。</p>
+
+        <h3>5. 联系方式</h3>
+        <p>退款及售后问题请联系：<a href="mailto:3193773138@qq.com">3193773138@qq.com</a></p>
+
+        <p className="muted legal-placeholder-note">本文档为首发占位版本，正式条款以后续更新为准。</p>
+      </div>
+      <LegalFooter navigate={navigate} />
+    </div>
+  );
+}
+
+function LegalFooter({ navigate }: { navigate: (path: string) => void }) {
+  return (
+    <footer className="site-footer">
+      <div className="site-footer-inner">
+        <div className="site-footer-links">
+          <button type="button" className="text-link" onClick={() => navigate("/terms")}>服务条款</button>
+          <span className="site-footer-sep">|</span>
+          <button type="button" className="text-link" onClick={() => navigate("/privacy")}>隐私政策</button>
+          <span className="site-footer-sep">|</span>
+          <button type="button" className="text-link" onClick={() => navigate("/refund")}>退款政策</button>
+        </div>
+        <div className="site-footer-contact">
+          客服邮箱：<a href="mailto:3193773138@qq.com">3193773138@qq.com</a>
+        </div>
+        <div className="site-footer-copy">&copy; {new Date().getFullYear()} AntiHub 团队</div>
+      </div>
+    </footer>
   );
 }
 
