@@ -2245,11 +2245,15 @@ function AdminBillingPage({
   role: string;
   pushToast: (toast: Toast) => void;
 }) {
-  const [tab, setTab] = useState<"plans" | "users" | "orders" | "audit">("plans");
+  const [tab, setTab] = useState<"plans" | "users" | "orders" | "audit" | "llm">("plans");
   const [plans, setPlans] = useState<BillingPlan[]>([]);
   const [userBilling, setUserBilling] = useState<AdminUserBillingStatus[]>([]);
   const [orders, setOrders] = useState<BillingOrder[]>([]);
   const [audit, setAudit] = useState<BillingAuditLog[]>([]);
+  const [llmProviders, setLlmProviders] = useState<{ id: string; label: string; base_url: string; model: string; api_format: string; configured: boolean; note: string }[]>([]);
+  const [llmActive, setLlmActive] = useState("");
+  const [llmTestResults, setLlmTestResults] = useState<Record<string, { ok: boolean; latency_ms: number; response?: string; error?: string } | null>>({});
+  const [llmTestingId, setLlmTestingId] = useState("");
   const [auditDetail, setAuditDetail] = useState<BillingAuditLogDetail | null>(null);
   const [saasAdminEnabled, setSaasAdminEnabled] = useState(true);
   const [saasHint, setSaasHint] = useState("");
@@ -2388,7 +2392,7 @@ function AdminBillingPage({
       } else if (tab === "orders") {
         const data = await fetchJson<BillingOrder[]>("/admin/billing/orders?limit=50");
         setOrders(Array.isArray(data) ? data : []);
-      } else {
+      } else if (tab === "audit") {
         const query = new URLSearchParams();
         query.set("limit", "50");
         if (auditFilter.provider.trim()) query.set("provider", auditFilter.provider.trim());
@@ -2396,6 +2400,10 @@ function AdminBillingPage({
         if (auditFilter.outcome.trim()) query.set("outcome", auditFilter.outcome.trim());
         const data = await fetchJson<BillingAuditLog[]>(`/admin/billing/audit?${query.toString()}`);
         setAudit(Array.isArray(data) ? data : []);
+      } else if (tab === "llm") {
+        const data = await fetchJson<{ providers: typeof llmProviders; active: string }>("/admin/llm/providers");
+        setLlmProviders(Array.isArray(data.providers) ? data.providers : []);
+        setLlmActive(data.active || "");
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -2794,6 +2802,7 @@ function AdminBillingPage({
               { id: "users", label: "订阅查询" },
               { id: "orders", label: "订单" },
               { id: "audit", label: "审计" },
+              { id: "llm", label: "模型" },
             ] as const
           ).map((item) => (
             <button
@@ -3274,6 +3283,88 @@ function AdminBillingPage({
             </div>
           ) : null}
         </>
+      ) : null}
+
+      {tab === "llm" ? (
+        <div className="card table-card">
+          <div className="recommend-section-head" style={{ marginBottom: 12 }}>
+            <div>
+              <div className="section-title">LLM 模型配置</div>
+              <div className="muted">当前活跃: <span className="mono">{llmActive || "未配置"}</span></div>
+            </div>
+          </div>
+          <div className="table billing-admin-table">
+            <div className="table-header">
+              <div className="cell">提供商</div>
+              <div className="cell">模型</div>
+              <div className="cell">接口</div>
+              <div className="cell">状态</div>
+              <div className="cell">操作</div>
+            </div>
+            {llmProviders.map((p) => (
+              <div className="table-row" key={p.id}>
+                <div className="cell">
+                  <span className="mono">{p.label}</span>
+                  {p.id === llmActive ? <span className="pill pill-success" style={{ marginLeft: 6 }}>活跃</span> : null}
+                </div>
+                <div className="cell mono">{p.model || <span className="muted">未设置</span>}</div>
+                <div className="cell mono">{p.api_format}</div>
+                <div className="cell">
+                  {p.configured ? (
+                    <span className="pill pill-success">已配置</span>
+                  ) : (
+                    <span className="pill pill-muted">未配置</span>
+                  )}
+                  {llmTestResults[p.id] ? (
+                    llmTestResults[p.id]!.ok ? (
+                      <span className="pill pill-success" style={{ marginLeft: 4 }}>{llmTestResults[p.id]!.latency_ms}ms</span>
+                    ) : (
+                      <span className="pill pill-danger" style={{ marginLeft: 4 }}>失败</span>
+                    )
+                  ) : null}
+                </div>
+                <div className="cell">
+                  <button
+                    className="ghost"
+                    type="button"
+                    disabled={!p.configured || llmTestingId === p.id}
+                    onClick={async () => {
+                      setLlmTestingId(p.id);
+                      setLlmTestResults((prev) => ({ ...prev, [p.id]: null }));
+                      try {
+                        const resp = await apiFetch(`/admin/llm/test/${encodeURIComponent(p.id)}`, { method: "POST" });
+                        const result = await resp.json();
+                        setLlmTestResults((prev) => ({ ...prev, [p.id]: result }));
+                        if (result.ok) {
+                          pushToast({ type: "success", message: `${p.label} 连接正常 (${result.latency_ms}ms)` });
+                        } else {
+                          pushToast({ type: "error", message: `${p.label} 测试失败`, detail: result.error || "" });
+                        }
+                      } catch (err) {
+                        pushToast({ type: "error", message: `${p.label} 测试异常`, detail: String(err) });
+                      } finally {
+                        setLlmTestingId("");
+                      }
+                    }}
+                  >
+                    {llmTestingId === p.id ? "测试中..." : "测试连接"}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!llmProviders.length ? <div className="muted">加载中...</div> : null}
+          </div>
+          {llmProviders.some((p) => p.note) ? (
+            <div className="muted" style={{ marginTop: 8, fontSize: "0.85em" }}>
+              {llmProviders.filter((p) => p.note).map((p) => (
+                <div key={p.id}>{p.label}: {p.note}</div>
+              ))}
+            </div>
+          ) : null}
+          <div className="muted" style={{ marginTop: 12, fontSize: "0.85em" }}>
+            切换模型提供商请修改服务器环境变量 <code>LLM_PROVIDER</code> 并重启服务。
+          </div>
+        </div>
       ) : null}
     </div>
   );

@@ -63,7 +63,8 @@ class OpenAIChatAdapter(LLMAdapter):
         base = (base_url or "").strip().rstrip("/")
         if not base:
             return "https://api.openai.com/v1"
-        if base.endswith("/v1"):
+        # Preserve provider-specific version paths (e.g. /v3, /v4).
+        if base.split("/")[-1].startswith("v"):
             return base
         return f"{base}/v1"
 
@@ -278,14 +279,59 @@ class OpenAIChatAdapter(LLMAdapter):
         return self._extract_content(response)
 
 
+class ClaudeChatAdapter(OpenAIChatAdapter):
+    """Adapter for Anthropic Claude Messages API.
+
+    Inherits prompt-construction methods from ``OpenAIChatAdapter`` and
+    overrides ``_post`` / ``_extract_content`` to speak the Claude Messages
+    protocol instead of OpenAI Chat Completions.
+    """
+
+    @staticmethod
+    def _normalize_base_url(base_url: str) -> str:
+        base = (base_url or "").strip().rstrip("/")
+        return base or "https://api.anthropic.com"
+
+    def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        from llm_registry import anthropic_response_to_openai, openai_to_anthropic_payload
+
+        claude_payload = openai_to_anthropic_payload(payload)
+        url = f"{self._base_url}/v1/messages"
+        body = json.dumps(claude_payload).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": self._api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as resp:
+                data = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
+            raise LLMError(f"Claude request failed: {exc.code} {detail}") from exc
+        except Exception as exc:
+            raise LLMError(f"Claude request failed: {exc}") from exc
+        try:
+            parsed = json.loads(data)
+        except Exception as exc:
+            raise LLMError(f"Claude response parse failed: {exc}") from exc
+        return anthropic_response_to_openai(parsed)
+
+
 def get_default_llm() -> LLMAdapter:
-    api_key = OPENAI_API_KEY or os.getenv("OPENAI_API_KEY", "")
-    base_url = (
-        os.getenv("OPENAI_API_BASE_URL")
-        or os.getenv("OPENAI_BASE_URL")
-        or os.getenv("OPENAI_API_BASE")
-        or OPENAI_BASE_URL
-        or ""
-    )
-    model = os.getenv("OPENAI_API_MODEL") or os.getenv("OPENAI_MODEL") or OPENAI_API_MODEL or ""
+    from llm_registry import resolve_provider
+
+    name, api_key, base_url, model, api_format = resolve_provider("analyze")
+
+    if not api_key:
+        # Return adapter with empty key — will raise LLMError on first use.
+        return OpenAIChatAdapter(api_key="", base_url="", model="")
+
+    if api_format == "anthropic":
+        return ClaudeChatAdapter(api_key=api_key, base_url=base_url, model=model)
     return OpenAIChatAdapter(api_key=api_key, base_url=base_url, model=model)

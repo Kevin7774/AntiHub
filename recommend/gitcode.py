@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import GITCODE_API_BASE_URL, GITCODE_SEARCH_PATH, GITCODE_TOKEN
+from config import GITCODE_API_BASE_URL, GITCODE_SEARCH_PATH, GITCODE_TOKEN, build_url_opener
 from runtime_metrics import record_counter_metric, record_timing_metric
 
 
@@ -37,9 +37,10 @@ def _request_json(url: str, token: Optional[str], timeout: int = 8) -> Any:
         headers["PRIVATE-TOKEN"] = token
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
+    opener = build_url_opener(url)
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as resp:  # nosec B310
+        with opener.open(request, timeout=timeout) as resp:  # nosec B310
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
