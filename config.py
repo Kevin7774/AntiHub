@@ -63,6 +63,12 @@ _ENV_ONLY_KEYS = {
     "WECHATPAY_APIV3_KEY",
     "WECHATPAY_PRIVATE_KEY_PEM",
     "WECHATPAY_PRIVATE_KEY_PATH",
+    # LLM provider keys
+    "DEEPSEEK_API_KEY",
+    "QWEN_API_KEY",
+    "CLAUDE_API_KEY",
+    "ZHIPU_API_KEY",
+    "DOUBAO_API_KEY",
 }
 
 
@@ -249,6 +255,14 @@ OPENAI_API_MODEL = str(_get_env_value(("OPENAI_API_MODEL", "OPENAI_MODEL")) or _
 MINIMAX_API_KEY = str(_get("MINIMAX_API_KEY", "")).strip()
 MINIMAX_BASE_URL = str(_get("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")).strip()
 MINIMAX_MODEL = str(_get("MINIMAX_MODEL", "MiniMax-M2.5")).strip()
+LLM_PROVIDER = str(_get("LLM_PROVIDER", "")).strip().lower()
+ANALYZE_LLM_PROVIDER = str(_get("ANALYZE_LLM_PROVIDER", "")).strip().lower()
+RECOMMEND_LLM_PROVIDER = str(_get("RECOMMEND_LLM_PROVIDER", "")).strip().lower()
+DEEPSEEK_API_KEY = str(_get("DEEPSEEK_API_KEY", "")).strip()
+QWEN_API_KEY = str(_get("QWEN_API_KEY", "")).strip()
+CLAUDE_API_KEY = str(_get("CLAUDE_API_KEY", "")).strip()
+ZHIPU_API_KEY = str(_get("ZHIPU_API_KEY", "")).strip()
+DOUBAO_API_KEY = str(_get("DOUBAO_API_KEY", "")).strip()
 ANALYZE_LLM_TEMPERATURE = float(_get("ANALYZE_LLM_TEMPERATURE", "0.2"))
 ANALYZE_LLM_MAX_TOKENS = int(_get("ANALYZE_LLM_MAX_TOKENS", "1200"))
 RECOMMEND_LLM_TEMPERATURE = float(_get("RECOMMEND_LLM_TEMPERATURE", "0.1"))

@@ -2920,6 +2920,29 @@ async def runtime_metrics(_: AuthIdentity = Depends(require_admin)) -> dict:
     return get_runtime_metrics_snapshot()
 
 
+# --- Admin: LLM providers ---------------------------------------------------
+
+@app.get("/admin/llm/providers")
+async def admin_llm_providers(_: AuthIdentity = Depends(require_admin)) -> dict:
+    from llm_registry import list_providers, resolve_provider
+
+    providers = list_providers()
+    active_name, _, _, _, active_format = resolve_provider()
+    return {"providers": providers, "active": active_name, "active_format": active_format}
+
+
+@app.post("/admin/llm/test/{provider_name}")
+async def admin_llm_test(provider_name: str, _: AuthIdentity = Depends(require_admin)) -> dict:
+    from llm_registry import PROVIDER_CATALOG, test_provider
+
+    if provider_name not in PROVIDER_CATALOG:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_name}")
+    import asyncio
+
+    result = await asyncio.get_event_loop().run_in_executor(None, test_provider, provider_name)
+    return result
+
+
 @app.post("/auth/login", response_model=AuthLoginResponse)
 async def auth_login(payload: AuthLoginRequest) -> AuthLoginResponse:
     if not AUTH_ENABLED:

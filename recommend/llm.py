@@ -6,15 +6,15 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 from config import (
-    MINIMAX_API_KEY,
-    MINIMAX_BASE_URL,
-    MINIMAX_MODEL,
-    OPENAI_API_KEY,
-    OPENAI_API_MODEL,
-    OPENAI_BASE_URL,
     RECOMMEND_LLM_MAX_TOKENS,
     RECOMMEND_LLM_TEMPERATURE,
     build_url_opener,
+)
+from llm_registry import (
+    anthropic_response_to_openai,
+    openai_to_anthropic_payload,
+    provider_available,
+    resolve_provider,
 )
 from runtime_metrics import record_counter_metric, record_timing_metric
 
@@ -23,43 +23,28 @@ class RecommendLLMError(RuntimeError):
     pass
 
 
-def _normalize_base_url(base_url: str) -> str:
-    base = (base_url or "").strip().rstrip("/")
-    if not base:
-        return "https://api.openai.com/v1"
-    if base.endswith("/v1"):
-        return base
-    return f"{base}/v1"
-
-
 def llm_available() -> bool:
-    return bool(MINIMAX_API_KEY or OPENAI_API_KEY)
+    return provider_available("recommend")
 
 
 def _active_provider() -> str:
-    if MINIMAX_API_KEY:
-        return "minimax"
-    if OPENAI_API_KEY:
-        return "openai"
-    return "none"
+    name, *_ = resolve_provider("recommend")
+    return name
 
 
 def _active_api_key() -> str:
-    if MINIMAX_API_KEY:
-        return str(MINIMAX_API_KEY).strip()
-    return str(OPENAI_API_KEY).strip()
+    _, api_key, *_ = resolve_provider("recommend")
+    return api_key
 
 
 def _active_base_url() -> str:
-    if MINIMAX_API_KEY:
-        return _normalize_base_url(MINIMAX_BASE_URL or "https://api.minimax.chat/v1")
-    return _normalize_base_url(OPENAI_BASE_URL or "https://api.openai.com/v1")
+    _, _, base_url, *_ = resolve_provider("recommend")
+    return base_url
 
 
 def _active_model(default: str) -> str:
-    if MINIMAX_API_KEY:
-        return str(MINIMAX_MODEL or "MiniMax-M2.5").strip() or "MiniMax-M2.5"
-    return str(OPENAI_API_MODEL or default).strip() or default
+    _, _, _, model, _ = resolve_provider("recommend")
+    return model or default
 
 
 def _strip_think_blocks(text: str) -> str:
@@ -106,24 +91,35 @@ def _find_json_array_fragment(text: str) -> Optional[str]:
 
 
 def _post(payload: Dict[str, Any], timeout: int = 25, metric_scope: str = "recommend.llm") -> Dict[str, Any]:
-    api_key = _active_api_key()
+    name, api_key, base_url, model, api_format = resolve_provider("recommend")
     if not api_key:
-        raise RecommendLLMError("OPENAI_API_KEY 或 MINIMAX_API_KEY 缺失")
-    base_url = _active_base_url()
-    url = f"{base_url}/chat/completions"
+        raise RecommendLLMError(
+            "LLM API 密钥未配置。请设置 LLM_PROVIDER 及对应的 API Key 环境变量。"
+        )
+
     request_payload = dict(payload or {})
     if not str(request_payload.get("model") or "").strip():
-        request_payload["model"] = _active_model("gpt-4o-mini")
-    body = json.dumps(request_payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={
+        request_payload["model"] = model or _active_model("gpt-4o-mini")
+
+    # Build the HTTP request based on provider API format.
+    if api_format == "anthropic":
+        claude_payload = openai_to_anthropic_payload(request_payload)
+        url = f"{base_url}/v1/messages"
+        body = json.dumps(claude_payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        }
+    else:
+        url = f"{base_url}/chat/completions"
+        body = json.dumps(request_payload).encode("utf-8")
+        headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
+        }
+
+    request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     opener = build_url_opener(url)
     started = time.perf_counter()
     try:
@@ -138,6 +134,11 @@ def _post(payload: Dict[str, Any], timeout: int = 25, metric_scope: str = "recom
         parsed = json.loads(raw)
     except Exception as exc:
         raise RecommendLLMError(f"LLM response parse failed: {exc}") from exc
+
+    # Normalize Claude response to OpenAI format for downstream compatibility.
+    if api_format == "anthropic":
+        parsed = anthropic_response_to_openai(parsed)
+
     if not isinstance(parsed, dict):
         raise RecommendLLMError("LLM response payload is not a JSON object")
     duration_ms = int((time.perf_counter() - started) * 1000)
@@ -300,7 +301,7 @@ def extract_search_queries(requirement_text: str) -> List[str]:
         return []
     if not llm_available():
         raise RecommendLLMError(
-            "深度搜索需要配置 MINIMAX_API_KEY（或 OPENAI_API_KEY）。当前长文档无法提炼技术关键词，搜索结果可能极不准确。"
+            "深度搜索需要配置 LLM API。请设置 LLM_PROVIDER 及对应的 API Key 环境变量。"
         )
 
     payload = {
