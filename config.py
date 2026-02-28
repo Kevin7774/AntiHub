@@ -1,5 +1,7 @@
 import os
+import urllib.request
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import yaml
 
@@ -380,3 +382,25 @@ OPENCLAW_BASE_URL = str(_get("OPENCLAW_BASE_URL", "")).strip()
 OPENCLAW_API_KEY = str(_get("OPENCLAW_API_KEY", "")).strip()
 OPENCLAW_TIMEOUT_SECONDS = int(_get("OPENCLAW_TIMEOUT_SECONDS", "300"))
 OPENCLAW_SKILL_ENDPOINT = str(_get("OPENCLAW_SKILL_ENDPOINT", "/skills/run")).strip()
+
+_IS_PRODUCTION = str(APP_ENV or "").strip().lower() in {"prod", "production"}
+
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def build_url_opener(url: str = "") -> urllib.request.OpenerDirector:
+    """Return a urllib opener with correct proxy behaviour.
+
+    * Production (APP_ENV=prod/production): always bypass proxy — the US
+      server has direct internet access.
+    * Development: respect HTTP_PROXY / HTTPS_PROXY env-vars (e.g. local
+      China proxy at 127.0.0.1:7897).
+    * Localhost targets always bypass proxy regardless of environment.
+    """
+    if _IS_PRODUCTION:
+        return _NO_PROXY_OPENER
+    if url:
+        host = (urlparse(url).hostname or "").lower()
+        if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.startswith("127."):
+            return _NO_PROXY_OPENER
+    return urllib.request.build_opener()

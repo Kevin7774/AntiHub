@@ -12,16 +12,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from config import OPENCLAW_BASE_URL
+from config import OPENCLAW_BASE_URL, build_url_opener
 from ingest.openclaw import OpenClawClient, OpenClawClientError
 from runtime_metrics import record_counter_metric, record_timing_metric
 
 
 def _build_opener_for_url(url: str) -> urllib.request.OpenerDirector:
-    host = (urlparse(url).hostname or "").lower()
-    if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.startswith("127."):
-        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    return urllib.request.build_opener()
+    return build_url_opener(url)
 
 
 def _http_get_text(url: str, timeout: int = 10, headers: Optional[Dict[str, str]] = None) -> str:

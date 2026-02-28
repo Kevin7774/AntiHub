@@ -75,6 +75,7 @@ from billing import (
     session_scope,
     verify_webhook_signature,
 )
+from billing.seed import seed_default_plans
 from billing.wechatpay import (
     decrypt_notification,
     parse_platform_certs,
@@ -477,6 +478,7 @@ async def lifespan(_: FastAPI):
             )
     if STARTUP_BOOTSTRAP_ENABLED:
         init_billing_db()
+        seed_default_plans()
         init_decision_db()
         _bootstrap_root_admin_user()
         _bootstrap_auth_users_from_config()
@@ -4625,7 +4627,8 @@ async def recommend_repos(
         file=file,
     )
     _charge_deep_search_points_if_needed(identity, mode=mode_value, query=query_value or requirement_text)
-    response = recommend_products(
+    response = await asyncio.to_thread(
+        recommend_products,
         query=query_value,
         requirement_text=requirement_text,
         mode=mode_value,

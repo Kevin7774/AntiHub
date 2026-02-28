@@ -14,6 +14,7 @@ from config import (
     OPENAI_BASE_URL,
     RECOMMEND_LLM_MAX_TOKENS,
     RECOMMEND_LLM_TEMPERATURE,
+    build_url_opener,
 )
 from runtime_metrics import record_counter_metric, record_timing_metric
 
@@ -123,9 +124,10 @@ def _post(payload: Dict[str, Any], timeout: int = 25, metric_scope: str = "recom
         },
         method="POST",
     )
+    opener = build_url_opener(url)
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as resp:  # nosec B310
+        with opener.open(request, timeout=timeout) as resp:  # nosec B310
             raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
