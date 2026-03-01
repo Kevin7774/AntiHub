@@ -243,11 +243,6 @@ _INDUSTRY_NOISE_TERMS = {
     "校园",
     "老师",
     "学生",
-    "社区",
-    "居民",
-    "政府",
-    "企业",
-    "客户",
     "hospital",
     "medical",
     "doctor",
@@ -256,6 +251,37 @@ _INDUSTRY_NOISE_TERMS = {
     "campus",
     "teacher",
     "student",
+}
+
+# Terms that look like industry noise but are legitimate tech/domain keywords
+# when paired with implementation context.  Never filter these out.
+_INDUSTRY_ALLOW_TERMS = {
+    "社区",
+    "居民",
+    "政府",
+    "企业",
+    "客户",
+    "商户",
+    "商超",
+    "物业",
+    "补贴",
+    "积分",
+    "支付",
+    "扫码",
+    "卡券",
+    "核销",
+    "审计",
+    "分账",
+    "saas",
+    "community",
+    "government",
+    "merchant",
+    "subsidy",
+    "payment",
+    "points",
+    "coupon",
+    "voucher",
+    "audit",
 }
 
 
@@ -268,6 +294,9 @@ def _clean_query_term(value: Any) -> str:
     if len(text) < 2:
         return ""
     lowered = text.lower()
+    # If the term contains any allowed domain keyword, keep it regardless.
+    if any(allow in lowered for allow in _INDUSTRY_ALLOW_TERMS):
+        return text[:80]
     if lowered in _INDUSTRY_NOISE_TERMS:
         return ""
     if any(noise in lowered for noise in _INDUSTRY_NOISE_TERMS):
@@ -287,6 +316,11 @@ def _clean_query_term(value: Any) -> str:
             "抓取",
             "爬虫",
             "队列",
+            "系统",
+            "平台",
+            "管理",
+            "SaaS",
+            "saas",
         )
         if not any(marker in lowered or marker in text for marker in tech_markers):
             return ""
@@ -310,9 +344,16 @@ def extract_search_queries(requirement_text: str) -> List[str]:
             {
                 "role": "system",
                 "content": (
-                    "你是一个资深全栈架构师。用户的输入是业务 PRD。"
-                    "请忽略行业背景，提取核心技术实现点。提取 3-5 个技术查询词，"
-                    "如 ['FileSystemWatcher', '增量文件同步', 'AES加密上传', 'Windows后台服务']。"
+                    "你是一个资深全栈架构师兼开源检索专家。用户的输入是业务需求文档。\n"
+                    "你的任务是提取 4-6 个**可直接用于 GitHub/Gitee 搜索的查询词**。\n"
+                    "规则：\n"
+                    "1. 每个查询词应当是具体的技术实现点或可搜索到实际开源项目的领域关键词。\n"
+                    "2. 同时包含中文和英文查询词（各至少1个），以覆盖中英文开源仓库。\n"
+                    "3. 不要输出纯行业名词（如'社区' '政府'），要组合成可搜索短语"
+                    "（如'社区积分管理系统' '扫码支付SaaS' 'coupon management system'）。\n"
+                    "4. 优先提取需求中明确提到的功能模块作为搜索词。\n"
+                    "示例输出：[\"扫码支付SaaS\", \"积分管理系统\", \"coupon voucher management\", "
+                    "\"merchant portal payment\", \"政府补贴资金池管理\"]\n"
                     "返回格式必须是纯 JSON 字符串数组，严禁包含任何 Markdown 格式。"
                 ),
             },
@@ -324,7 +365,7 @@ def extract_search_queries(requirement_text: str) -> List[str]:
                 ),
             },
         ],
-        "temperature": 0.1,
+        "temperature": 0.2,
         "max_tokens": max(256, min(RECOMMEND_LLM_MAX_TOKENS, 512)),
     }
     response = _post(payload, metric_scope="recommend.llm.query_rewrite")
@@ -464,7 +505,7 @@ def summarize_findings(
                     "}\n"
                     f"需求：{requirement_summary}\n"
                     f"候选：{json.dumps(condensed, ensure_ascii=False)}\n"
-                    "请优先点评用户需求中的关键实现点（如文件监控、增量同步、Windows 后台服务）"
+                    "请优先点评用户需求中的关键实现点（如支付、积分、卡券核销、商户管理等核心模块）"
                     "分别由哪些项目满足，并给出简短依据。\n"
                     f"insight_points 不超过 {max(2, min(max_points, 8))} 条。\n"
                 ),

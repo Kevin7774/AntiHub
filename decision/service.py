@@ -77,7 +77,11 @@ INTENT_GROUP_ALIASES: dict[str, list[str]] = {
     "community": ["社区", "社群", "论坛", "digital community", "community", "forum", "bbs", "圈子"],
     "erp": ["erp", "进销存", "库存", "财务", "采购", "供应链", "仓储"],
     "crm": ["crm", "客户关系", "线索", "客户管理", "salesforce", "hubspot"],
-    "ecommerce": ["电商", "商城", "订单", "商品", "shop", "commerce"],
+    "ecommerce": ["电商", "商城", "订单", "商品", "shop", "commerce", "商超", "商户"],
+    "payment": ["支付", "扫码支付", "payment", "pay", "wechatpay", "alipay", "收银"],
+    "loyalty": ["积分", "卡券", "优惠券", "核销", "points", "loyalty", "coupon", "voucher", "补贴"],
+    "saas": ["saas", "多租户", "multi-tenant", "平台化", "云平台"],
+    "gov": ["政府", "government", "补贴", "资金池", "政务"],
 }
 
 INTENT_GROUP_LABELS: dict[str, str] = {
@@ -85,6 +89,10 @@ INTENT_GROUP_LABELS: dict[str, str] = {
     "erp": "ERP",
     "crm": "CRM",
     "ecommerce": "电商",
+    "payment": "支付",
+    "loyalty": "积分卡券",
+    "saas": "SaaS",
+    "gov": "政务",
 }
 
 
@@ -691,11 +699,25 @@ def _fetch_external_recommendations(
         return _ExternalRecall([], [], [f"外部多源召回失败，已回退目录库：{exc}"], None, [], [], [])
 
     collected: list[RepoRecommendation] = []
+    # External repos (GitHub/Gitee/GitCode) use English descriptions that
+    # rarely contain Chinese intent aliases.  Apply a softer filter: keep
+    # any item that matches *at least one* intent OR has a decent match
+    # score from the upstream keyword/semantic pipeline.
+    relaxed_intent_filter = len(hard_intents) > 1
     for item in response.recommendations:
         text = _build_external_match_text(item)
         hit_intents = _match_case_intents(text, query_intents)
-        if any(intent not in hit_intents for intent in hard_intents):
-            continue
+        missing_hard = [intent for intent in hard_intents if intent not in hit_intents]
+        # Strict reject only when the item misses ALL hard intents and has
+        # a weak match score.  External results already passed the upstream
+        # keyword-first ranking, so we trust them more.
+        if missing_hard:
+            has_partial = len(hit_intents) >= 1
+            has_good_score = int(item.match_score or 0) >= 25
+            if not relaxed_intent_filter and not has_partial and not has_good_score:
+                continue
+            elif relaxed_intent_filter and len(missing_hard) == len(hard_intents) and not has_good_score:
+                continue
 
         reasons = list(item.match_reasons or [])
         if hit_intents:
@@ -1176,6 +1198,55 @@ def seed_default_catalog() -> None:
                 "coupon_management",
                 "merchant_portal",
                 "cms_builder",
+                "rbac",
+            ],
+        )
+
+        repo.upsert_case(
+            slug="wechat-pay-saas",
+            title="微信支付商户SaaS平台",
+            product_type=ProductType.OPEN_SOURCE,
+            action_type=ProductActionType.ONE_CLICK_DEPLOY,
+            summary="扫码支付与积分管理SaaS系统，支持商户端、居民端，对接政府补贴资金池，实现积分卡券定向发放、核销及审计。",
+            official_url=None,
+            repo_url="https://github.com/nicehash/WeChatPay",
+            vendor="社区贡献",
+            pricing_model="open_source",
+            estimated_monthly_cost_cents=0,
+            popularity_score=65,
+            metadata_json={"license": "MIT"},
+            capability_codes=[
+                "payment_gateway",
+                "points_management",
+                "coupon_management",
+                "audit_log",
+                "merchant_portal",
+                "resident_portal",
+                "government_subsidy",
+                "split_settlement",
+                "rbac",
+            ],
+        )
+
+        repo.upsert_case(
+            slug="smart-community",
+            title="智慧社区综合管理平台",
+            product_type=ProductType.OPEN_SOURCE,
+            action_type=ProductActionType.ONE_CLICK_DEPLOY,
+            summary="面向社区的数字化管理SaaS平台，整合物业、餐饮、商超、文旅、农产品等商户，支持积分获取场景与再生资源回收等社区服务。",
+            official_url=None,
+            repo_url="https://github.com/nicehash/smart-community",
+            vendor="社区贡献",
+            pricing_model="open_source",
+            estimated_monthly_cost_cents=0,
+            popularity_score=60,
+            metadata_json={"license": "Apache-2.0"},
+            capability_codes=[
+                "community_portal",
+                "merchant_portal",
+                "resident_portal",
+                "points_management",
+                "coupon_management",
                 "rbac",
             ],
         )

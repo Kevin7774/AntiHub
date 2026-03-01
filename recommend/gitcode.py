@@ -10,6 +10,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import GITCODE_API_BASE_URL, GITCODE_SEARCH_PATH, GITCODE_TOKEN, build_url_opener
 from runtime_metrics import record_counter_metric, record_timing_metric
 
+_MAX_RETRIES = 2
+_RETRY_DELAYS = (1.0, 2.0)
+
 
 class GitCodeAPIError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
@@ -27,7 +30,7 @@ def _normalize_path(path: str) -> str:
     return cleaned
 
 
-def _request_json(url: str, token: Optional[str], timeout: int = 8) -> Any:
+def _request_json(url: str, token: Optional[str], timeout: int = 12) -> Any:
     headers = {
         "Accept": "application/json",
         "User-Agent": "AntiHub/0.5",
@@ -39,18 +42,28 @@ def _request_json(url: str, token: Optional[str], timeout: int = 8) -> Any:
     request = urllib.request.Request(url, headers=headers)
     opener = build_url_opener(url)
     started = time.perf_counter()
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_RETRIES + 1):
+        if attempt > 0:
+            time.sleep(_RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)])
+        try:
+            with opener.open(request, timeout=timeout) as resp:  # nosec B310
+                raw = resp.read().decode("utf-8", errors="replace")
+            break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
+            record_counter_metric(name="recommend.provider.gitcode.http_error", value=1)
+            raise GitCodeAPIError("GITCODE_HTTP_ERROR", f"{exc.code} {detail}") from exc
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            record_counter_metric(name="recommend.provider.gitcode.request_failed", value=1)
+            continue
+    else:
+        raise GitCodeAPIError("GITCODE_REQUEST_FAILED", str(last_exc)) from last_exc
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    record_timing_metric(name="recommend.provider.gitcode.latency_ms", duration_ms=duration_ms)
     try:
-        with opener.open(request, timeout=timeout) as resp:  # nosec B310
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
-        record_counter_metric(name="recommend.provider.gitcode.http_error", value=1)
-        raise GitCodeAPIError("GITCODE_HTTP_ERROR", f"{exc.code} {detail}") from exc
-    except Exception as exc:  # noqa: BLE001
-        record_counter_metric(name="recommend.provider.gitcode.request_failed", value=1)
-        raise GitCodeAPIError("GITCODE_REQUEST_FAILED", str(exc)) from exc
-    try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except Exception as exc:  # noqa: BLE001
         snippet = (raw or "").strip().replace("\n", " ")[:160]
         if snippet.startswith("<!DOCTYPE html") or snippet.startswith("<html"):
@@ -59,7 +72,6 @@ def _request_json(url: str, token: Optional[str], timeout: int = 8) -> Any:
                 "GitCode endpoint returned HTML (check API path/token/WAF), expected JSON.",
             ) from exc
         raise GitCodeAPIError("GITCODE_PARSE_FAILED", str(exc)) from exc
-    record_timing_metric(name="recommend.provider.gitcode.latency_ms", duration_ms=int((time.perf_counter() - started) * 1000))
     return parsed
 
 
@@ -67,7 +79,7 @@ def search_repositories(
     query: str,
     per_page: int = 30,
     page: int = 1,
-    timeout: int = 8,
+    timeout: int = 12,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if not query:
         return [], {}

@@ -48,6 +48,18 @@ CJK_SYNONYM_MAP: Dict[str, List[str]] = {
     "情报": ["intel", "intelligence", "threat"],
     "汇总": ["collection", "aggregator", "awesome"],
     "聚合": ["aggregator", "collection"],
+    "支付": ["payment", "pay", "wechatpay", "alipay"],
+    "扫码": ["qrcode", "scan", "barcode"],
+    "积分": ["points", "loyalty", "rewards", "credit"],
+    "卡券": ["coupon", "voucher", "ticket"],
+    "核销": ["redeem", "verify", "writeoff"],
+    "审计": ["audit", "compliance", "traceability"],
+    "商户": ["merchant", "store", "vendor", "shop"],
+    "补贴": ["subsidy", "government-fund", "grant"],
+    "分账": ["settlement", "split-payment", "revenue-sharing"],
+    "社区": ["community", "forum", "neighborhood"],
+    "物业": ["property-management", "estate"],
+    "回收": ["recycling", "recycle", "waste"],
 }
 
 SEMANTIC_GROUPS: Dict[str, List[str]] = {
@@ -55,6 +67,14 @@ SEMANTIC_GROUPS: Dict[str, List[str]] = {
     "crawl": ["爬虫", "爬取", "抓取", "crawler", "scraper", "spider"],
     "intel": ["情报", "intel", "intelligence", "threat"],
     "aggregate": ["汇总", "聚合", "collection", "aggregator", "awesome"],
+    "payment": ["支付", "扫码", "payment", "pay", "wechatpay", "alipay", "qrcode"],
+    "points": ["积分", "loyalty", "rewards", "points", "credit"],
+    "coupon": ["卡券", "优惠券", "coupon", "voucher", "核销", "redeem"],
+    "merchant": ["商户", "商超", "merchant", "store", "vendor", "shop"],
+    "audit": ["审计", "合规", "audit", "compliance", "traceability"],
+    "subsidy": ["补贴", "资金池", "subsidy", "government-fund", "grant"],
+    "community": ["社区", "社群", "论坛", "community", "forum", "neighborhood"],
+    "saas": ["saas", "平台", "多租户", "multi-tenant", "cloud-platform"],
 }
 
 SEMANTIC_GROUP_LABELS: Dict[str, str] = {
@@ -62,9 +82,17 @@ SEMANTIC_GROUP_LABELS: Dict[str, str] = {
     "crawl": "采集抓取",
     "intel": "情报分析",
     "aggregate": "汇总聚合",
+    "payment": "支付系统",
+    "points": "积分管理",
+    "coupon": "卡券核销",
+    "merchant": "商户管理",
+    "audit": "审计合规",
+    "subsidy": "补贴资金",
+    "community": "社区服务",
+    "saas": "SaaS平台",
 }
 
-COMMUNITY_QUERY_ALIASES = ["community", "forum", "bbs", "社区", "社群", "论坛", "数字化社区"]
+COMMUNITY_QUERY_ALIASES = ["community", "forum", "bbs", "社区", "社群", "论坛", "数字化社区", "neighborhood", "居民"]
 
 EN_STOPWORDS = {
     "the",
@@ -94,6 +122,11 @@ CN_STOPWORDS = {
     "项目",
     "仓库",
     "需求",
+    "不少于",
+    "以及",
+    "提供",
+    "包含",
+    "含",
 }
 
 
@@ -865,17 +898,13 @@ def _resolve_search_queries(
                 )
                 return rewritten_queries
             warnings.append("深度搜索技术词提炼为空：当前输入无法生成可用检索词。")
-            if long_requirement:
-                _emit_trace(trace_steps, progress_callback, "需求拆解结果为空：已停止低精度降级检索。")
-                return []
             _emit_trace(trace_steps, progress_callback, "需求拆解结果为空：已回退关键词检索。")
         except Exception as exc:  # noqa: BLE001
             warnings.append(str(exc))
-            if long_requirement:
-                _emit_trace(trace_steps, progress_callback, "需求拆解失败：已停止低精度降级检索。")
-                return []
             _emit_trace(trace_steps, progress_callback, "需求拆解失败：已回退关键词检索。")
 
+    # Always fall back to keyword-based search queries instead of returning
+    # empty.  Returning [] for long requirements caused zero results.
     search_queries = _build_search_queries(fallback_search_query, normalized_query, profile)
     if not search_queries and fallback_search_query:
         fallback = sanitize_text(str(fallback_search_query or "")).strip()[:96]
@@ -964,24 +993,38 @@ def recommend_repositories(
         progress_callback,
         f"已生成 {len(search_queries)} 条检索表达式，启动并发多源搜索。",
     )
-    if rewrite_required and long_requirement and not search_queries:
-        warnings.append("深度搜索需要可用的技术词提炼结果；请配置 MINIMAX_API_KEY 或 OPENAI_API_KEY 后重试。")
-        return RecommendationResponse(
-            request_id=f"rec-{int(_now_ts())}",
-            query=normalized_query or None,
-            mode=mode,
-            generated_at=_now_ts(),
-            requirement_excerpt=requirement_text[:200] or None,
-            search_query=None,
-            profile=profile,
-            warnings=_dedupe_keep_order(warnings),
-            sources=[],
-            deep_summary=None,
-            insight_points=[],
-            trace_steps=trace_steps,
-            citations=[],
-            recommendations=[],
-        )
+    if not search_queries:
+        # Build emergency fallback queries from the profile or raw text
+        # instead of returning zero results.
+        fallback_parts: List[str] = []
+        if profile and profile.keywords:
+            fallback_parts.extend(str(k) for k in profile.keywords[:3])
+        if profile and profile.search_query:
+            fallback_parts.append(str(profile.search_query))
+        if not fallback_parts:
+            fallback_parts.append(sanitize_text(normalized_query or requirement_text)[:96])
+        search_queries = _normalize_rewritten_queries(fallback_parts)
+        if search_queries:
+            warnings.append("使用画像关键词作为降级检索词。")
+            _emit_trace(trace_steps, progress_callback, f"降级检索：使用 {len(search_queries)} 条画像关键词。")
+        else:
+            warnings.append("深度搜索需要可用的技术词提炼结果；请配置 LLM_PROVIDER 及对应 API Key 后重试。")
+            return RecommendationResponse(
+                request_id=f"rec-{int(_now_ts())}",
+                query=normalized_query or None,
+                mode=mode,
+                generated_at=_now_ts(),
+                requirement_excerpt=requirement_text[:200] or None,
+                search_query=None,
+                profile=profile,
+                warnings=_dedupe_keep_order(warnings),
+                sources=[],
+                deep_summary=None,
+                insight_points=[],
+                trace_steps=trace_steps,
+                citations=[],
+                recommendations=[],
+            )
 
     sources: List[str] = []
     candidates: List[Dict[str, Any]] = []
@@ -1184,7 +1227,9 @@ def recommend_repositories(
 
     must_groups = _query_must_groups(query_for_score)
     if must_groups and sorted_candidates:
-        min_group_hits = max(2, math.ceil(len(must_groups) * 0.5))
+        # For queries hitting many semantic groups (e.g. payment+points+coupon+merchant),
+        # don't require too many simultaneous hits; scale gently.
+        min_group_hits = max(1, min(3, math.ceil(len(must_groups) * 0.3)))
         hard_groups = [group for group in must_groups if group in {"wechat", "crawl"}]
         filtered_candidates: List[Dict[str, Any]] = []
         for item in sorted_candidates:
