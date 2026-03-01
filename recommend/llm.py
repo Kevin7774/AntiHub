@@ -235,6 +235,7 @@ def _extract_json_array(text: str) -> Optional[List[Any]]:
 
 
 _INDUSTRY_NOISE_TERMS = {
+    # Medical / Education – pure industry, never useful as code search terms
     "医院",
     "医疗",
     "医生",
@@ -251,37 +252,21 @@ _INDUSTRY_NOISE_TERMS = {
     "campus",
     "teacher",
     "student",
-}
-
-# Terms that look like industry noise but are legitimate tech/domain keywords
-# when paired with implementation context.  Never filter these out.
-_INDUSTRY_ALLOW_TERMS = {
+    # Generic scene/role nouns – must be combined with tech words to be useful
     "社区",
     "居民",
     "政府",
     "企业",
     "客户",
-    "商户",
-    "商超",
     "物业",
-    "补贴",
-    "积分",
-    "支付",
-    "扫码",
-    "卡券",
-    "核销",
-    "审计",
-    "分账",
-    "saas",
-    "community",
+    "业主",
+    "住户",
+    "商超",
     "government",
-    "merchant",
-    "subsidy",
-    "payment",
-    "points",
-    "coupon",
-    "voucher",
-    "audit",
+    "community",
+    "resident",
+    "enterprise",
+    "customer",
 }
 
 
@@ -294,38 +279,27 @@ def _clean_query_term(value: Any) -> str:
     if len(text) < 2:
         return ""
     lowered = text.lower()
-    # If the term contains any allowed domain keyword, keep it regardless.
-    if any(allow in lowered for allow in _INDUSTRY_ALLOW_TERMS):
-        return text[:80]
+    # Exact match on a noise term → always filter
     if lowered in _INDUSTRY_NOISE_TERMS:
         return ""
+    # If phrase contains a noise term, only keep when it also has a
+    # technical / implementation marker that makes it a useful code search query.
     if any(noise in lowered for noise in _INDUSTRY_NOISE_TERMS):
         tech_markers = (
-            "watch",
-            "sync",
-            "service",
-            "filesystem",
-            "monitor",
-            "daemon",
-            "监控",
-            "同步",
-            "增量",
-            "后台",
-            "服务",
-            "监听",
-            "抓取",
-            "爬虫",
-            "队列",
-            "系统",
-            "平台",
-            "管理",
-            "SaaS",
-            "saas",
+            # Chinese implementation words
+            "系统", "平台", "管理", "引擎", "服务", "工具", "框架",
+            "模块", "组件", "网关", "中间件", "微服务", "接口", "端",
+            "SDK", "sdk", "api", "SaaS", "saas",
+            "监控", "同步", "增量", "后台", "监听", "抓取", "爬虫", "队列",
+            # English implementation words
+            "system", "platform", "management", "engine", "service",
+            "tool", "framework", "module", "gateway", "middleware",
+            "watch", "sync", "filesystem", "monitor", "daemon",
+            "payment", "pay", "coupon", "points", "loyalty",
+            "merchant", "settlement", "audit", "app", "portal",
         )
         if not any(marker in lowered or marker in text for marker in tech_markers):
             return ""
-    if re.fullmatch(r"[\u4e00-\u9fff]{2,6}", text) and text in _INDUSTRY_NOISE_TERMS:
-        return ""
     return text[:80]
 
 
@@ -345,15 +319,23 @@ def extract_search_queries(requirement_text: str) -> List[str]:
                 "role": "system",
                 "content": (
                     "你是一个资深全栈架构师兼开源检索专家。用户的输入是业务需求文档。\n"
-                    "你的任务是提取 4-6 个**可直接用于 GitHub/Gitee 搜索的查询词**。\n"
-                    "规则：\n"
-                    "1. 每个查询词应当是具体的技术实现点或可搜索到实际开源项目的领域关键词。\n"
-                    "2. 同时包含中文和英文查询词（各至少1个），以覆盖中英文开源仓库。\n"
-                    "3. 不要输出纯行业名词（如'社区' '政府'），要组合成可搜索短语"
-                    "（如'社区积分管理系统' '扫码支付SaaS' 'coupon management system'）。\n"
-                    "4. 优先提取需求中明确提到的功能模块作为搜索词。\n"
-                    "示例输出：[\"扫码支付SaaS\", \"积分管理系统\", \"coupon voucher management\", "
-                    "\"merchant portal payment\", \"政府补贴资金池管理\"]\n"
+                    "你的任务是提取 6-8 个**可直接用于 GitHub/Gitee 搜索的技术实现关键词**。\n\n"
+                    "## 关键规则\n"
+                    "1. 每个关键词必须是【技术实现点】或【可搜索到实际开源项目的技术短语】。\n"
+                    "   想象你在GitHub上搜索，什么关键词能找到可复用的代码仓库？用那个词。\n"
+                    "2. 中文和英文关键词各至少 2 个，覆盖中英文开源仓库。\n"
+                    "3. 【严禁】输出纯行业/场景/角色名词，如：社区、居民、政府、企业、客户、物业。\n"
+                    "   必须转化为技术实现词：\n"
+                    "   - 社区 → 社区管理系统 / community-management-platform\n"
+                    "   - 居民端 → consumer-mobile-app / 用户端小程序\n"
+                    "   - 政府补贴 → subsidy-fund-management / 补贴资金池管理系统\n"
+                    "4. 优先提取：SDK名称、技术框架、功能模块名、系统架构组件。\n"
+                    "5. 思考需求中每个功能在开源社区对应什么项目名，用那种命名风格。\n\n"
+                    "## 示例\n"
+                    "需求：'开发扫码支付与积分管理SaaS系统'\n"
+                    "输出：[\"微信支付SDK\", \"扫码支付系统\", \"积分管理系统\", "
+                    "\"wechat-pay\", \"loyalty-points-system\", "
+                    "\"coupon-management\", \"merchant-saas-platform\", \"multi-tenant SaaS\"]\n\n"
                     "返回格式必须是纯 JSON 字符串数组，严禁包含任何 Markdown 格式。"
                 ),
             },
@@ -387,7 +369,7 @@ def extract_search_queries(requirement_text: str) -> List[str]:
         raise RecommendLLMError(
             "深度搜索需要配置稳定可用的大模型能力。当前长文档技术词提炼失败，搜索结果可能极不准确。"
         )
-    return normalized_queries[:5]
+    return normalized_queries[:8]
 
 
 def build_requirement_profile(requirement_text: str, query: str) -> Optional[Dict[str, Any]]:
