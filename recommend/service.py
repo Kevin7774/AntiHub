@@ -130,6 +130,25 @@ CN_STOPWORDS = {
 }
 
 
+def _expand_cjk_queries(queries: List[str]) -> List[str]:
+    """For each CJK-containing query, generate English companion queries via CJK_SYNONYM_MAP."""
+    expanded: List[str] = list(queries)
+    seen = {q.lower() for q in queries}
+    for query in queries:
+        if not _contains_cjk(query):
+            continue
+        en_parts: List[str] = []
+        for cjk_key, en_synonyms in CJK_SYNONYM_MAP.items():
+            if cjk_key in query and en_synonyms:
+                en_parts.append(en_synonyms[0])
+        if en_parts:
+            companion = " ".join(en_parts[:4])
+            if companion.lower() not in seen:
+                seen.add(companion.lower())
+                expanded.append(companion)
+    return expanded
+
+
 def is_deep_search_mode(mode: str) -> bool:
     return str(mode or "").strip().lower() == "deep"
 
@@ -890,6 +909,8 @@ def _resolve_search_queries(
             rewritten = extract_search_queries(rewrite_source_text)
             rewritten_queries = _normalize_rewritten_queries([str(item) for item in rewritten])
             if rewritten_queries:
+                rewritten_queries = _expand_cjk_queries(rewritten_queries)
+                rewritten_queries = _normalize_rewritten_queries(rewritten_queries)
                 preview = " | ".join(rewritten_queries[:3])
                 _emit_trace(
                     trace_steps,
