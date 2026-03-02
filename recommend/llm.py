@@ -291,12 +291,18 @@ def _clean_query_term(value: Any) -> str:
             "模块", "组件", "网关", "中间件", "微服务", "接口", "端",
             "SDK", "sdk", "api", "SaaS", "saas",
             "监控", "同步", "增量", "后台", "监听", "抓取", "爬虫", "队列",
+            "小程序", "对账", "清分", "审计", "核销", "分账", "资金池",
             # English implementation words
             "system", "platform", "management", "engine", "service",
             "tool", "framework", "module", "gateway", "middleware",
             "watch", "sync", "filesystem", "monitor", "daemon",
             "payment", "pay", "coupon", "points", "loyalty",
             "merchant", "settlement", "audit", "app", "portal",
+            "cloud", "docker", "k8s", "database", "db", "cache",
+            "deploy", "container", "webhook", "callback", "signature",
+            "registry", "notification", "push", "sms", "storage",
+            "reconciliation", "ledger", "idempotent", "onboarding",
+            "dashboard", "admin", "trail", "allocation", "pool",
         )
         if not any(marker in lowered or marker in text for marker in tech_markers):
             return ""
