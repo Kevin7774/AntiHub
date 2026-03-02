@@ -280,7 +280,7 @@ RECOMMEND_EXTERNAL_SOURCES_ENABLED = str(_get("RECOMMEND_EXTERNAL_SOURCES_ENABLE
 }
 RECOMMEND_ENABLE_GITEE = str(_get("RECOMMEND_ENABLE_GITEE", "true")).lower() in {"1", "true", "yes"}
 RECOMMEND_ENABLE_GITCODE = str(_get("RECOMMEND_ENABLE_GITCODE", "true")).lower() in {"1", "true", "yes"}
-RECOMMEND_PROVIDER_TIMEOUT_SECONDS = max(1, int(_get("RECOMMEND_PROVIDER_TIMEOUT_SECONDS", "8")))
+RECOMMEND_PROVIDER_TIMEOUT_SECONDS = max(1, int(_get("RECOMMEND_PROVIDER_TIMEOUT_SECONDS", "15")))
 GITEE_API_BASE_URL = str(_get("GITEE_API_BASE_URL", "https://gitee.com/api/v5")).strip().rstrip("/")
 GITEE_TOKEN = str(_get("GITEE_TOKEN", "")).strip()
 GITCODE_API_BASE_URL = str(_get("GITCODE_API_BASE_URL", "https://gitcode.com")).strip().rstrip("/")
