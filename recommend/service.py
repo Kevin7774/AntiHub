@@ -30,12 +30,14 @@ from recommend.llm import (
     summarize_findings,
 )
 from recommend.models import (
+    CandidateAssessment,
     RecommendationCitation,
     RecommendationProfile,
     RecommendationResponse,
     RepoHealthCard,
     RepoRecommendation,
     RepoScoreMetric,
+    ScoreBreakdown,
 )
 from templates_store import load_templates
 
@@ -318,6 +320,127 @@ def _compute_health_card(repo: Dict[str, Any]) -> RepoHealthCard:
         warnings=warnings,
         signals=signals,
     )
+
+
+_PERMISSIVE_LICENSES = frozenset({
+    "mit", "apache-2.0", "apache 2.0", "bsd-2-clause", "bsd-3-clause",
+    "isc", "unlicense", "wtfpl", "cc0-1.0", "0bsd", "mpl-2.0",
+})
+
+
+def _compute_module_coverage(
+    match: Dict[str, Any],
+    modules: List[Dict[str, Any]],
+) -> int:
+    """Score 0-100: how many decomposed modules does this repo cover?"""
+    if not modules:
+        return 0
+    summary_text = str(match.get("summary") or "").lower()
+    description = str(match.get("description") or "").lower()
+    topics_text = " ".join(str(t) for t in (match.get("topics") or [])).lower()
+    combined = f"{summary_text} {description} {topics_text}"
+    hit_count = 0
+    for mod in modules:
+        mod_name = str(mod.get("name") or "").lower()
+        if not mod_name:
+            continue
+        tokens = re.findall(r"[\w\u4e00-\u9fff]+", mod_name)
+        if not tokens:
+            continue
+        hits = sum(1 for t in tokens if t in combined)
+        if hits >= max(1, len(tokens) // 3):
+            hit_count += 1
+    return int(round(hit_count / max(1, len(modules)) * 100))
+
+
+def _estimate_customization_score(match: Dict[str, Any]) -> int:
+    """Score 0-100: higher means less customization needed (cheaper to adopt)."""
+    score = 0
+    stars = int(match.get("stars") or 0)
+    updated_days = match.get("updated_days")
+    license_name = str(match.get("license") or "").lower().strip()
+    topics = [str(t).lower() for t in (match.get("topics") or [])]
+    description = str(match.get("description") or "").lower()
+    combined = f"{description} {' '.join(topics)}"
+
+    # Documentation signals
+    if any(kw in combined for kw in ("readme", "doc", "documentation", "wiki", "文档")):
+        score += 10
+    # Docker/deployment signals
+    if any(kw in combined for kw in ("docker", "helm", "kubernetes", "k8s", "compose")):
+        score += 15
+    # CI/CD signals
+    if any(kw in combined for kw in ("ci", "github-actions", "travis", "circleci")):
+        score += 10
+    # Popularity signal
+    if stars > 1000:
+        score += 15
+    elif stars > 100:
+        score += 10
+    elif stars > 10:
+        score += 5
+    # Freshness signal
+    if updated_days is not None and updated_days <= 90:
+        score += 15
+    elif updated_days is not None and updated_days <= 365:
+        score += 8
+    # License permissiveness
+    if license_name in _PERMISSIVE_LICENSES:
+        score += 15
+    elif license_name:
+        score += 5
+    # Topic overlap richness
+    if len(topics) >= 5:
+        score += 10
+    elif len(topics) >= 2:
+        score += 5
+    return min(100, score)
+
+
+def _estimate_integration_score(match: Dict[str, Any]) -> int:
+    """Score 0-100: higher means easier to integrate."""
+    score = 0
+    topics = [str(t).lower() for t in (match.get("topics") or [])]
+    description = str(match.get("description") or "").lower()
+    language = str(match.get("language") or "").lower()
+    combined = f"{description} {' '.join(topics)}"
+
+    # API/SDK signals
+    if any(kw in combined for kw in ("api", "sdk", "rest", "graphql", "grpc", "openapi")):
+        score += 20
+    # Docker support
+    if any(kw in combined for kw in ("docker", "container", "compose", "helm")):
+        score += 20
+    # Examples/demo
+    if any(kw in combined for kw in ("example", "demo", "sample", "quickstart", "tutorial")):
+        score += 20
+    # Standard languages
+    if language in ("python", "javascript", "typescript", "java", "go", "rust"):
+        score += 20
+    elif language:
+        score += 10
+    # Plugin/extension architecture
+    if any(kw in combined for kw in ("plugin", "extension", "middleware", "hook")):
+        score += 20
+    return min(100, score)
+
+
+def _customization_estimate_label(score: int) -> str:
+    """Convert customization score to S/M/L label."""
+    if score >= 70:
+        return "S"
+    if score >= 40:
+        return "M"
+    return "L"
+
+
+def _integration_complexity_label(score: int) -> str:
+    """Convert integration score to S/M/L label (inverted: high score = S = easy)."""
+    if score >= 60:
+        return "S"
+    if score >= 30:
+        return "M"
+    return "L"
 
 
 def _contains_cjk(text: str) -> bool:
@@ -1178,24 +1301,44 @@ def recommend_repositories(
         missing_must = [group for group in must_groups if group not in hit_groups]
         must_coverage = int(round((len(must_groups) - len(missing_must)) / max(1, len(must_groups)) * 100))
         model_score = int(item.get("score") or 0)
-        if ranking and isinstance(ranking.get("results"), list):
-            final_score = int(
-                round(
-                    lexical_score * 0.52
-                    + precision_score * 0.18
-                    + must_coverage * 0.10
-                    + model_score * 0.20
-                )
-            )
+
+        # --- v2 scoring rubric ---
+        # Retrieve decomposed modules list (injected by pipeline in commit 6)
+        _modules: List[Dict[str, Any]] = match.get("_v2_modules") or []
+        health = _compute_health_card(match)
+        maturity_raw = health.overall_score
+
+        if _modules:
+            # v2 rubric: module_coverage*35 + tech_fit*20 + cost*20 + integration*10 + maturity*15
+            mod_coverage_raw = _compute_module_coverage(match, _modules)
+            tech_fit_raw = int(round(lexical_score * 0.50 + precision_score * 0.20 + model_score * 0.30))
+            cost_raw = _estimate_customization_score(match)
+            integ_raw = _estimate_integration_score(match)
+            final_score = int(round(
+                mod_coverage_raw * 0.35
+                + tech_fit_raw * 0.20
+                + cost_raw * 0.20
+                + integ_raw * 0.10
+                + maturity_raw * 0.15
+            ))
         else:
-            final_score = int(
-                round(
-                    lexical_score * 0.56
-                    + precision_score * 0.12
-                    + must_coverage * 0.08
-                    + model_score * 0.24
-                )
-            )
+            # Legacy rubric (no modules available — quick mode or module decomp failed)
+            mod_coverage_raw = must_coverage
+            cost_raw = _estimate_customization_score(match)
+            integ_raw = _estimate_integration_score(match)
+            if ranking and isinstance(ranking.get("results"), list):
+                tech_fit_raw = int(round(lexical_score * 0.50 + precision_score * 0.20 + model_score * 0.30))
+                final_score = int(round(
+                    lexical_score * 0.52 + precision_score * 0.18
+                    + must_coverage * 0.10 + model_score * 0.20
+                ))
+            else:
+                tech_fit_raw = int(round(lexical_score * 0.56 + precision_score * 0.20 + model_score * 0.24))
+                final_score = int(round(
+                    lexical_score * 0.56 + precision_score * 0.12
+                    + must_coverage * 0.08 + model_score * 0.24
+                ))
+
         if str(match.get("source") or "") == "templates" and lexical_score < 30:
             final_score = max(0, final_score - 8)
         if group_total >= 2 and group_hit_count <= 1:
@@ -1224,6 +1367,31 @@ def recommend_repositories(
         match["match_reasons"] = _dedupe_keep_order(reasons)
         match["match_tags"] = _dedupe_keep_order([str(r) for r in (item.get("tags") or []) if str(r).strip()])
         match["risk_notes"] = _dedupe_keep_order(risk_notes)
+        match["_score_breakdown"] = {
+            "relevance": mod_coverage_raw,
+            "popularity": maturity_raw,
+            "cost_bonus": cost_raw,
+            "capability_match": tech_fit_raw,
+            "final_score": max(0, min(100, final_score)),
+        }
+        if _modules:
+            covered_ids = []
+            for mod in _modules:
+                mod_name = str(mod.get("name") or "").lower()
+                tokens = re.findall(r"[\w\u4e00-\u9fff]+", mod_name)
+                if tokens:
+                    combined = f"{summary_text.lower()} {str(match.get('description') or '').lower()}"
+                    hits = sum(1 for t in tokens if t in combined)
+                    if hits >= max(1, len(tokens) // 3):
+                        covered_ids.append(str(mod.get("id") or ""))
+            match["_assessment"] = {
+                "modules_covered": covered_ids,
+                "coverage_score": mod_coverage_raw,
+                "customization_estimate": _customization_estimate_label(cost_raw),
+                "customization_days": "1-3" if cost_raw >= 70 else ("3-10" if cost_raw >= 40 else "10-30"),
+                "integration_complexity": _integration_complexity_label(integ_raw),
+                "why_it_matches": "; ".join(reasons[:2]) if reasons else "",
+            }
         sorted_candidates.append(match)
 
     pre_guardrail_candidates = list(sorted_candidates)
@@ -1339,6 +1507,10 @@ def recommend_repositories(
     recommendations: List[RepoRecommendation] = []
     for item in sorted_candidates:
         health = _compute_health_card(item)
+        bd_raw = item.get("_score_breakdown")
+        breakdown = ScoreBreakdown(**bd_raw) if isinstance(bd_raw, dict) else None
+        asmt_raw = item.get("_assessment")
+        assessment = CandidateAssessment(**asmt_raw) if isinstance(asmt_raw, dict) else None
         recommendations.append(
             RepoRecommendation(
                 id=item["id"],
@@ -1361,6 +1533,8 @@ def recommend_repositories(
                 risk_notes=item.get("risk_notes") or [],
                 health=health,
                 source=item.get("source"),
+                score_breakdown=breakdown,
+                assessment=assessment,
             )
         )
 
