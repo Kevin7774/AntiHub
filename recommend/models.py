@@ -43,6 +43,47 @@ class RecommendationAction(BaseModel):
     detail: Optional[str] = None
 
 
+class KeywordBuckets(BaseModel):
+    implementation: List[str] = Field(default_factory=list)
+    repo_discovery: List[str] = Field(default_factory=list)
+    scenario_modules: List[str] = Field(default_factory=list)
+    negatives: List[str] = Field(default_factory=list)
+
+
+class ModuleDecomposition(BaseModel):
+    id: str
+    name: str
+    category: str
+    actors: List[str] = Field(default_factory=list)
+    integrations: List[str] = Field(default_factory=list)
+    compliance: List[str] = Field(default_factory=list)
+
+
+class CandidateAssessment(BaseModel):
+    modules_covered: List[str] = Field(default_factory=list)
+    coverage_score: int = 0
+    customization_estimate: str = "M"
+    customization_days: str = ""
+    integration_complexity: str = "M"
+    why_it_matches: str = ""
+
+
+class AssemblyBlueprint(BaseModel):
+    mvp_repos: List[str] = Field(default_factory=list)
+    mvp_glue_code: List[str] = Field(default_factory=list)
+    mvp_deployment: str = ""
+    mvp_timeline: str = ""
+    phase2: List[str] = Field(default_factory=list)
+    phase3: List[str] = Field(default_factory=list)
+
+
+class MonetizationAngle(BaseModel):
+    full_custom_estimate: str = ""
+    with_oss_estimate: str = ""
+    reduction_pct: int = 0
+    productizable: List[str] = Field(default_factory=list)
+
+
 class RepoRecommendation(BaseModel):
     id: str
     full_name: str
@@ -70,6 +111,7 @@ class RepoRecommendation(BaseModel):
     score_breakdown: Optional[ScoreBreakdown] = None
     action: Optional[RecommendationAction] = None
     deployment_mode: Optional[str] = None
+    assessment: Optional[CandidateAssessment] = None
 
 
 class RecommendationProfile(BaseModel):
@@ -80,6 +122,7 @@ class RecommendationProfile(BaseModel):
     nice_to_have: List[str] = Field(default_factory=list)
     target_stack: List[str] = Field(default_factory=list)
     scenarios: List[str] = Field(default_factory=list)
+    keyword_buckets: Optional[KeywordBuckets] = None
 
 
 class RecommendationCitation(BaseModel):
@@ -105,5 +148,8 @@ class RecommendationResponse(BaseModel):
     deep_summary: Optional[str] = None
     insight_points: List[str] = Field(default_factory=list)
     trace_steps: List[str] = Field(default_factory=list)
+    modules: List[ModuleDecomposition] = Field(default_factory=list)
+    assembly: Optional[AssemblyBlueprint] = None
+    monetization: Optional[MonetizationAngle] = None
     citations: List[RecommendationCitation] = Field(default_factory=list)
     recommendations: List[RepoRecommendation] = Field(default_factory=list)
