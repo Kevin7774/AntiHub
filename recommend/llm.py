@@ -462,6 +462,68 @@ def build_requirement_profile(requirement_text: str, query: str) -> Optional[Dic
     return _extract_json(content)
 
 
+def decompose_requirement_modules(requirement_text: str) -> Optional[List[Dict[str, Any]]]:
+    """Decompose requirement into 15-30 functional modules with reuse tags."""
+    raw_text = str(requirement_text or "").strip()
+    if not raw_text or not llm_available():
+        return None
+    payload = {
+        "model": _active_model("gpt-4o-mini"),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是一位资深软件架构师。根据用户需求文档，将系统拆解为 15-30 个可独立实现的功能模块。\n"
+                    "每个模块标注复用类别：\n"
+                    '- "Reusable OSS": 可直接复用开源项目，无需或极少修改\n'
+                    '- "Config-only": 仅需配置即可使用（如 Nginx/Redis/MQ）\n'
+                    '- "Light customization": 需少量定制（<5人天），如改 UI 或加字段\n'
+                    '- "Heavy customization": 需大量定制（>5人天），如自研核心逻辑\n\n'
+                    "输出纯 JSON 数组，严禁 Markdown：\n"
+                    '[{"id":"M01","name":"模块名称（含技术实现词）",'
+                    '"category":"Reusable OSS|Config-only|Light customization|Heavy customization",'
+                    '"actors":["参与角色"],"integrations":["外部集成点"],"compliance":["合规要求"]}]'
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "请只输出 JSON 数组，不要 markdown，不要解释。\n"
+                    f"需求文档如下：\n{raw_text[:4000]}"
+                ),
+            },
+        ],
+        "temperature": 0.3,
+        "max_tokens": max(512, min(RECOMMEND_LLM_MAX_TOKENS, 1500)),
+    }
+    response = _post(payload, metric_scope="recommend.llm.module_decomp")
+    content = _extract_content(response)
+    parsed = _extract_json_array(content)
+    if not parsed:
+        return None
+    modules: List[Dict[str, Any]] = []
+    valid_categories = {"Reusable OSS", "Config-only", "Light customization", "Heavy customization"}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        mid = str(item.get("id") or f"M{len(modules) + 1:02d}").strip()
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        category = str(item.get("category") or "Light customization").strip()
+        if category not in valid_categories:
+            category = "Light customization"
+        modules.append({
+            "id": mid,
+            "name": name,
+            "category": category,
+            "actors": [str(a) for a in (item.get("actors") or []) if str(a).strip()],
+            "integrations": [str(i) for i in (item.get("integrations") or []) if str(i).strip()],
+            "compliance": [str(c) for c in (item.get("compliance") or []) if str(c).strip()],
+        })
+    return modules if modules else None
+
+
 def rank_candidates(
     requirement_summary: str,
     candidates: List[Dict[str, Any]],
