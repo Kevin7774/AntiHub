@@ -309,10 +309,15 @@ def _clean_query_term(value: Any) -> str:
     return text[:80]
 
 
-def extract_search_queries(requirement_text: str) -> List[str]:
+def extract_search_query_buckets(requirement_text: str) -> Dict[str, List[str]]:
+    """Extract structured keyword buckets from requirement text.
+
+    Returns dict with keys: implementation, repo_discovery, scenario_modules, negatives.
+    Falls back to flat list wrapped as repo_discovery on parse failure.
+    """
     raw_text = str(requirement_text or "").strip()
     if not raw_text:
-        return []
+        return {"implementation": [], "repo_discovery": [], "scenario_modules": [], "negatives": []}
     if not llm_available():
         raise RecommendLLMError(
             "深度搜索需要配置 LLM API。请设置 LLM_PROVIDER 及对应的 API Key 环境变量。"
@@ -325,57 +330,100 @@ def extract_search_queries(requirement_text: str) -> List[str]:
                 "role": "system",
                 "content": (
                     "你是一个资深全栈架构师兼开源检索专家。用户的输入是业务需求文档。\n"
-                    "你的任务是提取 6-8 个**可直接用于 GitHub/Gitee 搜索的技术实现关键词**。\n\n"
-                    "## 关键规则\n"
-                    "1. 每个关键词必须是【技术实现点】或【可搜索到实际开源项目的技术短语】。\n"
-                    "   想象你在GitHub上搜索，什么关键词能找到可复用的代码仓库？用那个词。\n"
-                    "2. 中文和英文关键词各至少 2 个，覆盖中英文开源仓库。\n"
-                    "3. 【严禁】输出纯行业/场景/角色名词，如：社区、居民、政府、企业、客户、物业。\n"
-                    "   必须转化为技术实现词：\n"
-                    "   - 社区 → 社区管理系统 / community-management-platform\n"
-                    "   - 居民端 → consumer-mobile-app / 用户端小程序\n"
-                    "   - 政府补贴 → subsidy-fund-management / 补贴资金池管理系统\n"
-                    "4. 优先提取：SDK名称、技术框架、功能模块名、系统架构组件。\n"
-                    "5. 思考需求中每个功能在开源社区对应什么项目名，用那种命名风格。\n\n"
-                    "## 示例\n"
-                    "需求：'开发扫码支付与积分管理SaaS系统'\n"
-                    "输出：[\"微信支付SDK\", \"扫码支付系统\", \"积分管理系统\", "
-                    "\"wechat-pay\", \"loyalty-points-system\", "
-                    "\"coupon-management\", \"merchant-saas-platform\", \"multi-tenant SaaS\"]\n\n"
-                    "返回格式必须是纯 JSON 字符串数组，严禁包含任何 Markdown 格式。"
+                    "你的任务是将需求拆解为三类检索关键词 + 负面词。\n\n"
+                    "## 关键词分桶规则\n"
+                    "A) implementation（SDK/协议/模块名）：可直接 import 或 pip install 的技术名。\n"
+                    "   中英文各至少 2 个。例：wechat-pay-v3-sdk, Redis分布式锁, coupon-engine\n"
+                    "B) repo_discovery（GitHub/Gitee 双语搜索短语）：能搜到可复用仓库的短语。\n"
+                    "   中英文各至少 2 个。例：wechat payment system, 积分管理系统, merchant SaaS platform\n"
+                    "C) scenario_modules（业务流程/场景模块名）：用于匹配和解释，不直接搜索。\n"
+                    "   例：扫码支付, 积分获取与消耗, 卡券核销, 商户入驻\n"
+                    "D) negatives（排除词）：纯行业/角色名词，不能作为搜索词。\n"
+                    "   例：社区, 居民, 政府, 企业, 客户, 物业\n\n"
+                    "## 规则\n"
+                    "1. 【严禁】在 implementation 和 repo_discovery 中出现纯行业/角色名词。\n"
+                    "   必须转化为技术实现词（社区→社区管理系统, 政府补贴→补贴资金池管理系统）。\n"
+                    "2. 优先提取：SDK名称、技术框架、功能模块名、系统架构组件。\n"
+                    "3. implementation + repo_discovery 合计 8-12 个。\n"
+                    "4. scenario_modules 3-8 个。\n\n"
+                    "## 输出格式\n"
+                    "纯 JSON 对象，严禁 Markdown：\n"
+                    '{"implementation":["..."],"repo_discovery":["..."],'
+                    '"scenario_modules":["..."],"negatives":["..."]}'
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    "请只输出 JSON 数组，不要 markdown，不要解释，不要对象。\n"
+                    "请只输出 JSON 对象，不要 markdown，不要解释。\n"
                     f"需求文档如下：\n{raw_text[:4000]}"
                 ),
             },
         ],
         "temperature": 0.2,
-        "max_tokens": max(256, min(RECOMMEND_LLM_MAX_TOKENS, 512)),
+        "max_tokens": max(256, min(RECOMMEND_LLM_MAX_TOKENS, 768)),
     }
     response = _post(payload, metric_scope="recommend.llm.query_rewrite")
     content = _extract_content(response)
-    parsed = _extract_json_array(content)
-    if parsed is None:
-        raise RecommendLLMError("query rewrite parse failed: expected JSON array")
 
-    normalized_queries: List[str] = []
+    # Try structured parse first
+    parsed_obj = _extract_json(content)
+    if parsed_obj and isinstance(parsed_obj.get("implementation"), list):
+        buckets: Dict[str, List[str]] = {"implementation": [], "repo_discovery": [], "scenario_modules": [], "negatives": []}
+        for key in buckets:
+            raw_items = parsed_obj.get(key) or []
+            seen: set[str] = set()
+            for item in raw_items:
+                cleaned = _clean_query_term(item) if key != "negatives" else str(item or "").strip()
+                lower = cleaned.lower()
+                if not cleaned or lower in seen:
+                    continue
+                seen.add(lower)
+                buckets[key].append(cleaned)
+        return buckets
+
+    # Fallback: try parsing as flat JSON array (backward compat with old LLM output)
+    parsed_array = _extract_json_array(content)
+    if parsed_array is not None:
+        flat: List[str] = []
+        seen_flat: set[str] = set()
+        for item in parsed_array:
+            cleaned = _clean_query_term(item)
+            lower = cleaned.lower()
+            if not cleaned or lower in seen_flat:
+                continue
+            seen_flat.add(lower)
+            flat.append(cleaned)
+        return {
+            "implementation": flat[:4],
+            "repo_discovery": flat[4:8],
+            "scenario_modules": [],
+            "negatives": [],
+        }
+
+    raise RecommendLLMError("query rewrite parse failed: expected JSON object or array")
+
+
+def extract_search_queries(requirement_text: str) -> List[str]:
+    """Extract flat list of search queries (backward-compatible wrapper).
+
+    Internally uses extract_search_query_buckets and flattens
+    implementation + repo_discovery into a single list.
+    """
+    buckets = extract_search_query_buckets(requirement_text)
+    merged: List[str] = []
     seen: set[str] = set()
-    for item in parsed:
-        query = _clean_query_term(item)
-        key = query.lower()
-        if not query or key in seen:
-            continue
-        seen.add(key)
-        normalized_queries.append(query)
-    if len(normalized_queries) < 3:
+    for key in ("implementation", "repo_discovery"):
+        for item in buckets.get(key, []):
+            lower = item.lower()
+            if lower not in seen:
+                seen.add(lower)
+                merged.append(item)
+    if len(merged) < 3:
         raise RecommendLLMError(
             "深度搜索需要配置稳定可用的大模型能力。当前长文档技术词提炼失败，搜索结果可能极不准确。"
         )
-    return normalized_queries[:8]
+    return merged[:12]
 
 
 def build_requirement_profile(requirement_text: str, query: str) -> Optional[Dict[str, Any]]:
