@@ -9,6 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from config import build_url_opener
 from runtime_metrics import record_counter_metric, record_timing_metric
 
+_MAX_RETRIES = 2
+_RETRY_DELAYS = (1.0, 2.0)
+
+
 class GitHubAPIError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -79,25 +83,34 @@ def _request_json(url: str, token: Optional[str], timeout: int = 12) -> Dict[str
     request = urllib.request.Request(url, headers=headers)
     opener = build_url_opener(url)
     started = time.perf_counter()
-    try:
-        with opener.open(request, timeout=timeout) as resp:  # nosec B310
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
-        record_counter_metric(name="recommend.provider.github.http_error", value=1)
-        if exc.code == 403 and "rate limit" in detail.lower():
-            raise GitHubAPIError("GITHUB_RATE_LIMIT", detail) from exc
-        raise GitHubAPIError("GITHUB_HTTP_ERROR", f"{exc.code} {detail}") from exc
-    except Exception as exc:
-        record_counter_metric(name="recommend.provider.github.request_failed", value=1)
-        raise GitHubAPIError("GITHUB_REQUEST_FAILED", str(exc)) from exc
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_RETRIES + 1):
+        if attempt > 0:
+            time.sleep(_RETRY_DELAYS[min(attempt - 1, len(_RETRY_DELAYS) - 1)])
+        try:
+            with opener.open(request, timeout=timeout) as resp:  # nosec B310
+                raw = resp.read().decode("utf-8", errors="replace")
+            break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
+            record_counter_metric(name="recommend.provider.github.http_error", value=1)
+            if exc.code == 403 and "rate limit" in detail.lower():
+                raise GitHubAPIError("GITHUB_RATE_LIMIT", detail) from exc
+            raise GitHubAPIError("GITHUB_HTTP_ERROR", f"{exc.code} {detail}") from exc
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            record_counter_metric(name="recommend.provider.github.request_failed", value=1)
+            continue
+    else:
+        raise GitHubAPIError("GITHUB_REQUEST_FAILED", str(last_exc)) from last_exc
     try:
         parsed = json.loads(raw)
     except Exception as exc:
         raise GitHubAPIError("GITHUB_PARSE_FAILED", str(exc)) from exc
     if not isinstance(parsed, dict):
         raise GitHubAPIError("GITHUB_PARSE_FAILED", "response payload is not an object")
-    record_timing_metric(name="recommend.provider.github.latency_ms", duration_ms=int((time.perf_counter() - started) * 1000))
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    record_timing_metric(name="recommend.provider.github.latency_ms", duration_ms=duration_ms)
     return dict(parsed)
 
 
