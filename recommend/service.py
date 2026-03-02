@@ -854,7 +854,7 @@ def _normalize_rewritten_queries(raw_queries: List[str]) -> List[str]:
             continue
         seen.add(key)
         normalized.append(trimmed)
-    return normalized[:5]
+    return normalized[:10]
 
 
 def _should_rewrite_queries(mode: str, normalized_query: str, requirement_text: str) -> bool:
