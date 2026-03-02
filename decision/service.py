@@ -868,6 +868,9 @@ def recommend_products(
                 deep_summary=external.deep_summary,
                 insight_points=external.insight_points,
                 trace_steps=merged_trace,
+                modules=external.modules,
+                assembly=external.assembly,
+                monetization=external.monetization,
                 citations=external.citations[:12],
                 recommendations=external.recommendations[:top_k],
             )
@@ -1006,6 +1009,9 @@ def recommend_products(
             deep_summary=deep_summary,
             insight_points=insight_points,
             trace_steps=trace_steps,
+            modules=external.modules,
+            assembly=external.assembly,
+            monetization=external.monetization,
             citations=citations,
             recommendations=recommendations,
         )

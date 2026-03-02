@@ -23,14 +23,21 @@ from recommend.gitee import GiteeAPIError
 from recommend.gitee import search_repositories as search_gitee_repositories
 from recommend.github import GitHubAPIError, fetch_repo, search_repositories
 from recommend.llm import (
+    build_assembly_plan,
     build_requirement_profile,
+    decompose_requirement_modules,
     extract_search_queries,
+    extract_search_query_buckets,
     llm_available,
     rank_candidates,
     summarize_findings,
 )
 from recommend.models import (
+    AssemblyBlueprint,
     CandidateAssessment,
+    KeywordBuckets,
+    ModuleDecomposition,
+    MonetizationAngle,
     RecommendationCitation,
     RecommendationProfile,
     RecommendationResponse,
@@ -1021,16 +1028,26 @@ def _resolve_search_queries(
     warnings: List[str],
     trace_steps: List[str],
     progress_callback: Optional[Callable[[str], None]],
-) -> List[str]:
+) -> Tuple[List[str], Optional[Dict[str, List[str]]]]:
+    """Returns (search_queries, keyword_buckets_or_None)."""
     should_rewrite = _should_rewrite_queries(mode, normalized_query, requirement_text)
     long_requirement = _is_long_requirement_input(normalized_query, requirement_text)
     rewrite_text_parts = [str(normalized_query or "").strip(), str(requirement_text or "").strip()]
     rewrite_source_text = "\n".join([part for part in rewrite_text_parts if part]).strip()
+    buckets: Optional[Dict[str, List[str]]] = None
     if should_rewrite and rewrite_source_text:
         _emit_trace(trace_steps, progress_callback, "启动需求拆解：提取可用于开源检索的技术实现词...")
         try:
-            rewritten = extract_search_queries(rewrite_source_text)
-            rewritten_queries = _normalize_rewritten_queries([str(item) for item in rewritten])
+            buckets = extract_search_query_buckets(rewrite_source_text)
+            flat: List[str] = []
+            seen: set[str] = set()
+            for key in ("implementation", "repo_discovery"):
+                for item in buckets.get(key, []):
+                    lower = item.lower()
+                    if lower not in seen:
+                        seen.add(lower)
+                        flat.append(item)
+            rewritten_queries = _normalize_rewritten_queries(flat)
             if rewritten_queries:
                 rewritten_queries = _expand_cjk_queries(rewritten_queries)
                 rewritten_queries = _normalize_rewritten_queries(rewritten_queries)
@@ -1040,7 +1057,7 @@ def _resolve_search_queries(
                     progress_callback,
                     f"需求拆解完成：生成 {len(rewritten_queries)} 条技术检索词（{preview}）。",
                 )
-                return rewritten_queries
+                return rewritten_queries, buckets
             warnings.append("深度搜索技术词提炼为空：当前输入无法生成可用检索词。")
             _emit_trace(trace_steps, progress_callback, "需求拆解结果为空：已回退关键词检索。")
         except Exception as exc:  # noqa: BLE001
@@ -1054,7 +1071,7 @@ def _resolve_search_queries(
         fallback = sanitize_text(str(fallback_search_query or "")).strip()[:96]
         if fallback:
             search_queries = [fallback]
-    return _normalize_rewritten_queries(search_queries)
+    return _normalize_rewritten_queries(search_queries), buckets
 
 
 def _search_multi_query_provider_parallel(
@@ -1107,6 +1124,17 @@ def recommend_repositories(
     deep_summary: Optional[str] = None
     insight_points: List[str] = []
     citations: List[RecommendationCitation] = []
+    v2_modules_raw: Optional[List[Dict[str, Any]]] = None
+    v2_keyword_buckets: Optional[Dict[str, List[str]]] = None
+    v2_assembly_raw: Optional[Dict[str, Any]] = None
+
+    # In deep mode, run module decomposition in parallel with profile building
+    _module_future = None
+    _is_deep = is_deep_search_mode(mode)
+    if _is_deep:
+        _emit_trace(trace_steps, progress_callback, "深度模式：并行启动需求模块拆解...")
+        _v2_pool = ThreadPoolExecutor(max_workers=1)
+        _module_future = _v2_pool.submit(decompose_requirement_modules, requirement_text)
 
     _emit_trace(trace_steps, progress_callback, "解析输入并提取关键词画像...")
     try:
@@ -1118,11 +1146,21 @@ def recommend_repositories(
         summary = fallback_text
         warnings.append("语义画像生成失败，已降级为关键词匹配。")
         warnings.append(str(exc))
+
+    # Collect module decomposition result
+    if _module_future is not None:
+        try:
+            v2_modules_raw = _module_future.result(timeout=30)
+            if v2_modules_raw:
+                _emit_trace(trace_steps, progress_callback, f"需求模块拆解完成：{len(v2_modules_raw)} 个模块。")
+        except Exception:
+            warnings.append("需求模块拆解失败，已跳过模块覆盖评分。")
+        _v2_pool.shutdown(wait=False)
         _emit_trace(trace_steps, progress_callback, "语义画像降级：已切换关键词检索。")
     search_query = search_query.strip() or normalized_query or requirement_text[:120].strip()
     rewrite_required = _should_rewrite_queries(mode, normalized_query, requirement_text)
     long_requirement = _is_long_requirement_input(normalized_query, requirement_text)
-    search_queries = _resolve_search_queries(
+    search_queries, v2_keyword_buckets = _resolve_search_queries(
         mode=mode,
         normalized_query=normalized_query,
         requirement_text=requirement_text,
@@ -1280,6 +1318,11 @@ def recommend_repositories(
         ranked_items = ranking["results"]
     else:
         ranked_items = _fallback_rank(candidates, summary or normalized_query or requirement_text, top_k)
+
+    # Inject modules list into candidates so v2 scoring can compute coverage
+    if v2_modules_raw:
+        for cand in candidates:
+            cand["_v2_modules"] = v2_modules_raw
 
     if search_queries:
         query_for_score = " ".join(search_queries[:5])
@@ -1504,6 +1547,73 @@ def recommend_repositories(
         if not deep_summary:
             deep_summary = "深度分析已完成，结果按关键词匹配优先并结合语义信号排序。"
 
+        # v2: build assembly blueprint + monetization (deep mode only)
+        if v2_modules_raw and sorted_candidates:
+            _emit_trace(trace_steps, progress_callback, "深度模式：生成组装方案与成本对比...")
+            try:
+                v2_assembly_raw = build_assembly_plan(
+                    summary or normalized_query or requirement_text[:300],
+                    v2_modules_raw,
+                    sorted_candidates[:10],
+                )
+            except Exception:
+                warnings.append("组装方案生成失败，已跳过。")
+
+    # Build v2 model objects from raw dicts
+    v2_modules_list: List[ModuleDecomposition] = []
+    if v2_modules_raw:
+        for m in v2_modules_raw:
+            v2_modules_list.append(ModuleDecomposition(
+                id=str(m.get("id") or ""),
+                name=str(m.get("name") or ""),
+                category=str(m.get("category") or ""),
+                actors=m.get("actors") or [],
+                integrations=m.get("integrations") or [],
+                compliance=m.get("compliance") or [],
+            ))
+    v2_kb: Optional[KeywordBuckets] = None
+    if v2_keyword_buckets:
+        v2_kb = KeywordBuckets(
+            implementation=v2_keyword_buckets.get("implementation", []),
+            repo_discovery=v2_keyword_buckets.get("repo_discovery", []),
+            scenario_modules=v2_keyword_buckets.get("scenario_modules", []),
+            negatives=v2_keyword_buckets.get("negatives", []),
+        )
+    v2_assembly: Optional[AssemblyBlueprint] = None
+    v2_monetization: Optional[MonetizationAngle] = None
+    if v2_assembly_raw:
+        asm_data = v2_assembly_raw.get("assembly") or {}
+        mon_data = v2_assembly_raw.get("monetization") or {}
+        if asm_data:
+            v2_assembly = AssemblyBlueprint(
+                mvp_repos=[str(r) for r in (asm_data.get("mvp_repos") or [])],
+                mvp_glue_code=[str(g) for g in (asm_data.get("mvp_glue_code") or [])],
+                mvp_deployment=str(asm_data.get("mvp_deployment") or ""),
+                mvp_timeline=str(asm_data.get("mvp_timeline") or ""),
+                phase2=[str(p) for p in (asm_data.get("phase2") or [])],
+                phase3=[str(p) for p in (asm_data.get("phase3") or [])],
+            )
+        if mon_data:
+            v2_monetization = MonetizationAngle(
+                full_custom_estimate=str(mon_data.get("full_custom_estimate") or ""),
+                with_oss_estimate=str(mon_data.get("with_oss_estimate") or ""),
+                reduction_pct=int(mon_data.get("reduction_pct") or 0),
+                productizable=[str(p) for p in (mon_data.get("productizable") or [])],
+            )
+
+    # Attach keyword_buckets to profile
+    if profile and v2_kb:
+        profile = RecommendationProfile(
+            summary=profile.summary,
+            search_query=profile.search_query,
+            keywords=profile.keywords,
+            must_have=profile.must_have,
+            nice_to_have=profile.nice_to_have,
+            target_stack=profile.target_stack,
+            scenarios=profile.scenarios,
+            keyword_buckets=v2_kb,
+        )
+
     recommendations: List[RepoRecommendation] = []
     for item in sorted_candidates:
         health = _compute_health_card(item)
@@ -1551,6 +1661,9 @@ def recommend_repositories(
         deep_summary=deep_summary,
         insight_points=insight_points,
         trace_steps=trace_steps,
+        modules=v2_modules_list,
+        assembly=v2_assembly,
+        monetization=v2_monetization,
         citations=citations,
         recommendations=recommendations,
     )
