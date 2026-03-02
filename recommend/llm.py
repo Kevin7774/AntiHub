@@ -615,3 +615,74 @@ def summarize_findings(
     response = _post(payload, metric_scope="recommend.llm.summary")
     content = _extract_content(response)
     return _extract_json(content)
+
+
+def build_assembly_plan(
+    requirement_summary: str,
+    modules: List[Dict[str, Any]],
+    top_candidates: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Generate assembly blueprint + monetization angle from modules and candidates."""
+    if not llm_available() or not modules or not top_candidates:
+        return None
+    condensed_modules = [
+        {"id": str(m.get("id") or ""), "name": str(m.get("name") or ""), "category": str(m.get("category") or "")}
+        for m in modules[:25]
+    ]
+    condensed_repos = [
+        {
+            "full_name": str(c.get("full_name") or c.get("name") or ""),
+            "description": str(c.get("description") or "")[:160],
+            "match_score": int(c.get("match_score") or 0),
+            "topics": [str(t) for t in (c.get("topics") or [])[:5]],
+        }
+        for c in top_candidates[:10]
+    ]
+    payload = {
+        "model": _active_model("gpt-4o-mini"),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是一位开源技术方案架构师。根据需求模块列表和候选开源项目，生成组装方案。\n"
+                    "输出纯 JSON，严禁 Markdown：\n"
+                    "{\n"
+                    '  "assembly": {\n'
+                    '    "mvp_repos": ["owner/repo 仓库名，从候选中选"],\n'
+                    '    "mvp_glue_code": ["需要编写的胶水代码描述"],\n'
+                    '    "mvp_deployment": "部署方式描述(如 docker-compose: N services)",\n'
+                    '    "mvp_timeline": "MVP 交付周期(如 1-2 weeks)",\n'
+                    '    "phase2": ["Phase 2 定制项"],\n'
+                    '    "phase3": ["Phase 3 替换/升级项"]\n'
+                    "  },\n"
+                    '  "monetization": {\n'
+                    '    "full_custom_estimate": "全定制估算(如 60-80 person-days)",\n'
+                    '    "with_oss_estimate": "OSS组装估算(如 15-25 person-days)",\n'
+                    '    "reduction_pct": 65,\n'
+                    '    "productizable": ["可产品化方向：模板/行业包/运维手册"]\n'
+                    "  }\n"
+                    "}\n\n"
+                    "规则：\n"
+                    "1. mvp_repos 从候选仓库中选择，优先选 match_score 最高的。\n"
+                    "2. mvp_glue_code 只列必要的集成/适配代码，不列框架或基础设施。\n"
+                    "3. reduction_pct = (full - oss) / full * 100，取整。\n"
+                    "4. 模块中标注 Reusable OSS 和 Config-only 的不需要定制人天。\n"
+                    "5. productizable 至少列 2 项可商业化方向。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"需求摘要：{requirement_summary[:300]}\n"
+                    f"模块列表：{json.dumps(condensed_modules, ensure_ascii=False)}\n"
+                    f"候选仓库：{json.dumps(condensed_repos, ensure_ascii=False)}\n"
+                    "请只输出 JSON，不要 markdown，不要解释。"
+                ),
+            },
+        ],
+        "temperature": 0.3,
+        "max_tokens": max(512, min(RECOMMEND_LLM_MAX_TOKENS, 1200)),
+    }
+    response = _post(payload, metric_scope="recommend.llm.assembly")
+    content = _extract_content(response)
+    return _extract_json(content)
