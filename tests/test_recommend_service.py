@@ -429,7 +429,12 @@ def test_recommend_repositories_rewrites_long_requirement_into_technical_queries
         )
 
     monkeypatch.setattr("recommend.service.search_repositories", fake_search_repositories)
-    monkeypatch.setattr("recommend.service.extract_search_queries", lambda _text: ["FileSystemWatcher", "文件增量同步", "Windows后台监控服务"])
+    monkeypatch.setattr("recommend.service.extract_search_query_buckets", lambda _text: {
+        "implementation": ["FileSystemWatcher", "文件增量同步"],
+        "repo_discovery": ["Windows后台监控服务"],
+        "scenario_modules": [],
+        "negatives": [],
+    })
     monkeypatch.setattr("recommend.service.RECOMMEND_ENABLE_GITEE", False)
     monkeypatch.setattr("recommend.service.RECOMMEND_ENABLE_GITCODE", False)
     monkeypatch.setattr("recommend.service.llm_available", lambda: False)
@@ -494,23 +499,21 @@ def test_recommend_repositories_populates_repo_url_from_html_url(monkeypatch) ->
     assert result.recommendations[0].repo_url == result.recommendations[0].html_url
 
 
-def test_recommend_repositories_stops_low_precision_fallback_when_query_rewrite_unavailable(monkeypatch) -> None:
-    called = {"search": False}
-
+def test_recommend_repositories_warns_when_query_rewrite_unavailable(monkeypatch) -> None:
     def fake_search_repositories(
         _query: str,
         per_page: int = 20,
         page: int = 1,
         timeout: int = 8,
     ):
-        called["search"] = True
         return ([], {"total_count": 0})
 
     monkeypatch.setattr("recommend.service.search_repositories", fake_search_repositories)
     monkeypatch.setattr("recommend.service.RECOMMEND_ENABLE_GITEE", False)
     monkeypatch.setattr("recommend.service.RECOMMEND_ENABLE_GITCODE", False)
+    monkeypatch.setattr("recommend.service.llm_available", lambda: False)
     monkeypatch.setattr(
-        "recommend.service.extract_search_queries",
+        "recommend.service.extract_search_query_buckets",
         lambda _text: (_ for _ in ()).throw(RuntimeError("深度搜索需要配置 OPENAI_API_KEY。当前长文档无法提炼技术关键词，搜索结果可能极不准确。")),
     )
     monkeypatch.setattr("recommend.service.load_templates", lambda: [])
@@ -526,6 +529,7 @@ def test_recommend_repositories_stops_low_precision_fallback_when_query_rewrite_
         mode="deep",
         limit=10,
     )
+    # LLM query rewrite failed; system falls back to keyword extraction from raw text.
+    # With zero results from search, recommendations should be empty.
     assert result.recommendations == []
-    assert called["search"] is False
-    assert any("OPENAI_API_KEY" in item for item in (result.warnings or []))
+    assert any("OPENAI_API_KEY" in item or "提炼" in item for item in (result.warnings or []))
