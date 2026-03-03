@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import GITCODE_API_BASE_URL, GITCODE_SEARCH_PATH, GITCODE_TOKEN, build_url_opener
+import httpx
+
+from config import GITCODE_API_BASE_URL, GITCODE_SEARCH_PATH, GITCODE_TOKEN, build_httpx_proxy
+from recommend._http_retry import with_retry
 from runtime_metrics import record_counter_metric, record_timing_metric
 
 
@@ -36,21 +37,22 @@ def _request_json(url: str, token: Optional[str], timeout: int = 8) -> Any:
         # GitLab-compatible instances usually accept PRIVATE-TOKEN.
         headers["PRIVATE-TOKEN"] = token
         headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, headers=headers)
-    opener = build_url_opener(url)
+    proxy_kwargs = build_httpx_proxy(url)
     started = time.perf_counter()
     try:
-        with opener.open(request, timeout=timeout) as resp:  # nosec B310
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
+        with httpx.Client(timeout=timeout, **proxy_kwargs) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            raw = resp.text
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text
         record_counter_metric(name="recommend.provider.gitcode.http_error", value=1)
-        raise GitCodeAPIError("GITCODE_HTTP_ERROR", f"{exc.code} {detail}") from exc
+        raise GitCodeAPIError("GITCODE_HTTP_ERROR", f"{exc.response.status_code} {detail}") from exc
     except Exception as exc:  # noqa: BLE001
         record_counter_metric(name="recommend.provider.gitcode.request_failed", value=1)
         raise GitCodeAPIError("GITCODE_REQUEST_FAILED", str(exc)) from exc
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except Exception as exc:  # noqa: BLE001
         snippet = (raw or "").strip().replace("\n", " ")[:160]
         if snippet.startswith("<!DOCTYPE html") or snippet.startswith("<html"):
@@ -85,7 +87,7 @@ def search_repositories(
     token = str(GITCODE_TOKEN or "").strip() or None
     encoded = urllib.parse.urlencode(params)
     url = f"{base}{search_path}?{encoded}"
-    payload = _request_json(url, token, timeout=timeout)
+    payload = with_retry(_request_json, url, token, timeout=timeout)
 
     items: List[Dict[str, Any]] = []
     meta: Dict[str, Any] = {}

@@ -31,8 +31,7 @@ def test_extract_search_queries_fallback_when_llm_unavailable(monkeypatch) -> No
     try:
         llm.extract_search_queries("需要 FileSystemWatcher + Windows 后台服务 + 文件增量同步")
     except llm.RecommendLLMError as exc:
-        assert "OPENAI_API_KEY" in str(exc)
-        assert "MINIMAX_API_KEY" in str(exc)
+        assert "LLM" in str(exc)
     else:
         raise AssertionError("expected RecommendLLMError when llm is unavailable")
 

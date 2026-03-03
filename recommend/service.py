@@ -865,15 +865,9 @@ def _resolve_search_queries(
                 )
                 return rewritten_queries
             warnings.append("深度搜索技术词提炼为空：当前输入无法生成可用检索词。")
-            if long_requirement:
-                _emit_trace(trace_steps, progress_callback, "需求拆解结果为空：已停止低精度降级检索。")
-                return []
             _emit_trace(trace_steps, progress_callback, "需求拆解结果为空：已回退关键词检索。")
         except Exception as exc:  # noqa: BLE001
             warnings.append(str(exc))
-            if long_requirement:
-                _emit_trace(trace_steps, progress_callback, "需求拆解失败：已停止低精度降级检索。")
-                return []
             _emit_trace(trace_steps, progress_callback, "需求拆解失败：已回退关键词检索。")
 
     search_queries = _build_search_queries(fallback_search_query, normalized_query, profile)
@@ -964,28 +958,20 @@ def recommend_repositories(
         progress_callback,
         f"已生成 {len(search_queries)} 条检索表达式，启动并发多源搜索。",
     )
-    if rewrite_required and long_requirement and not search_queries:
-        warnings.append("深度搜索需要可用的技术词提炼结果；请配置 MINIMAX_API_KEY 或 OPENAI_API_KEY 后重试。")
-        return RecommendationResponse(
-            request_id=f"rec-{int(_now_ts())}",
-            query=normalized_query or None,
-            mode=mode,
-            generated_at=_now_ts(),
-            requirement_excerpt=requirement_text[:200] or None,
-            search_query=None,
-            profile=profile,
-            warnings=_dedupe_keep_order(warnings),
-            sources=[],
-            deep_summary=None,
-            insight_points=[],
-            trace_steps=trace_steps,
-            citations=[],
-            recommendations=[],
-        )
+    if not search_queries:
+        warnings.append("技术词提炼未生成检索表达式，结果可能不精确。")
+        # Build a minimal query from the raw input so we don't return nothing.
+        fallback_q = sanitize_text(str(normalized_query or requirement_text or "")).strip()[:96]
+        if fallback_q:
+            search_queries = [fallback_q]
 
     sources: List[str] = []
     candidates: List[Dict[str, Any]] = []
     seen_candidate_ids: set[str] = set()
+    # Cross-platform dedup: track full_name (without source prefix) so the
+    # same repository on GitHub/Gitee/GitCode is only kept once.  The first
+    # occurrence (typically GitHub) wins because it has richer metadata.
+    seen_full_names: set[str] = set()
     warned_providers: set[str] = set()
     provider_specs = _provider_specs()
     for idx, query_item in enumerate(search_queries):
@@ -1010,7 +996,13 @@ def recommend_repositories(
             repo_id = str(normalized_item.get("id") or "")
             if not repo_id or repo_id in seen_candidate_ids:
                 continue
+            # Cross-platform dedup by full_name (e.g. "owner/repo").
+            full_name = str(normalized_item.get("full_name") or "").strip().lower()
+            if full_name and full_name in seen_full_names:
+                continue
             seen_candidate_ids.add(repo_id)
+            if full_name:
+                seen_full_names.add(full_name)
             candidates.append(normalized_item)
         if items and source_name not in sources:
             sources.append(source_name)

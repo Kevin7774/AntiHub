@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import GITEE_API_BASE_URL, GITEE_TOKEN, build_url_opener
+import httpx
+
+from config import GITEE_API_BASE_URL, GITEE_TOKEN, build_httpx_proxy
+from recommend._http_retry import with_retry
 from runtime_metrics import record_counter_metric, record_timing_metric
 
 
@@ -25,16 +26,17 @@ def _request_json(url: str, token: Optional[str], timeout: int = 8) -> Any:
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, headers=headers)
-    opener = build_url_opener(url)
+    proxy_kwargs = build_httpx_proxy(url)
     started = time.perf_counter()
     try:
-        with opener.open(request, timeout=timeout) as resp:  # nosec B310
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
+        with httpx.Client(timeout=timeout, **proxy_kwargs) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            raw = resp.text
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text
         record_counter_metric(name="recommend.provider.gitee.http_error", value=1)
-        raise GiteeAPIError("GITEE_HTTP_ERROR", f"{exc.code} {detail}") from exc
+        raise GiteeAPIError("GITEE_HTTP_ERROR", f"{exc.response.status_code} {detail}") from exc
     except Exception as exc:  # noqa: BLE001
         record_counter_metric(name="recommend.provider.gitee.request_failed", value=1)
         raise GiteeAPIError("GITEE_REQUEST_FAILED", str(exc)) from exc
@@ -67,7 +69,7 @@ def search_repositories(
         params["access_token"] = token
     encoded = urllib.parse.urlencode(params)
     url = f"{base}/search/repositories?{encoded}"
-    payload = _request_json(url, token, timeout=timeout)
+    payload = with_retry(_request_json, url, token, timeout=timeout)
 
     items: List[Dict[str, Any]] = []
     meta: Dict[str, Any] = {}

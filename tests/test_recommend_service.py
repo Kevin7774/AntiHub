@@ -494,7 +494,9 @@ def test_recommend_repositories_populates_repo_url_from_html_url(monkeypatch) ->
     assert result.recommendations[0].repo_url == result.recommendations[0].html_url
 
 
-def test_recommend_repositories_stops_low_precision_fallback_when_query_rewrite_unavailable(monkeypatch) -> None:
+def test_recommend_repositories_falls_back_to_keyword_search_when_query_rewrite_unavailable(monkeypatch) -> None:
+    """When LLM query rewrite fails, the system should fall back to keyword
+    search rather than returning empty results."""
     called = {"search": False}
 
     def fake_search_repositories(
@@ -511,7 +513,7 @@ def test_recommend_repositories_stops_low_precision_fallback_when_query_rewrite_
     monkeypatch.setattr("recommend.service.RECOMMEND_ENABLE_GITCODE", False)
     monkeypatch.setattr(
         "recommend.service.extract_search_queries",
-        lambda _text: (_ for _ in ()).throw(RuntimeError("深度搜索需要配置 OPENAI_API_KEY。当前长文档无法提炼技术关键词，搜索结果可能极不准确。")),
+        lambda _text: (_ for _ in ()).throw(RuntimeError("深度搜索需要配置 LLM API。")),
     )
     monkeypatch.setattr("recommend.service.load_templates", lambda: [])
 
@@ -526,6 +528,7 @@ def test_recommend_repositories_stops_low_precision_fallback_when_query_rewrite_
         mode="deep",
         limit=10,
     )
-    assert result.recommendations == []
-    assert called["search"] is False
-    assert any("OPENAI_API_KEY" in item for item in (result.warnings or []))
+    # With the fallback fix, search SHOULD be called (keyword fallback).
+    assert called["search"] is True
+    # Warnings should mention the rewrite failure.
+    assert any("LLM" in item for item in (result.warnings or []))

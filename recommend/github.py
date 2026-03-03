@@ -1,12 +1,13 @@
 import json
 import os
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
-from config import build_url_opener
+import httpx
+
+from config import build_httpx_proxy
+from recommend._http_retry import with_retry
 from runtime_metrics import record_counter_metric, record_timing_metric
 
 class GitHubAPIError(RuntimeError):
@@ -76,18 +77,19 @@ def _request_json(url: str, token: Optional[str], timeout: int = 12) -> Dict[str
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, headers=headers)
-    opener = build_url_opener(url)
+    proxy_kwargs = build_httpx_proxy(url)
     started = time.perf_counter()
     try:
-        with opener.open(request, timeout=timeout) as resp:  # nosec B310
-            raw = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace") if exc.fp else str(exc)
+        with httpx.Client(timeout=timeout, **proxy_kwargs) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            raw = resp.text
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text
         record_counter_metric(name="recommend.provider.github.http_error", value=1)
-        if exc.code == 403 and "rate limit" in detail.lower():
+        if exc.response.status_code == 403 and "rate limit" in detail.lower():
             raise GitHubAPIError("GITHUB_RATE_LIMIT", detail) from exc
-        raise GitHubAPIError("GITHUB_HTTP_ERROR", f"{exc.code} {detail}") from exc
+        raise GitHubAPIError("GITHUB_HTTP_ERROR", f"{exc.response.status_code} {detail}") from exc
     except Exception as exc:
         record_counter_metric(name="recommend.provider.github.request_failed", value=1)
         raise GitHubAPIError("GITHUB_REQUEST_FAILED", str(exc)) from exc
@@ -116,7 +118,7 @@ def search_repositories(
         "https://api.github.com/search/repositories"
         f"?q={encoded}&sort=stars&order=desc&per_page={per_page}&page={page}"
     )
-    payload = _request_json(url, token, timeout=timeout)
+    payload = with_retry(_request_json, url, token, timeout=timeout)
     items = payload.get("items") if isinstance(payload, dict) else None
     if not isinstance(items, list):
         return [], payload if isinstance(payload, dict) else {}
@@ -128,5 +130,5 @@ def fetch_repo(full_name: str, timeout: int = 12) -> Dict[str, Any]:
         return {}
     token = _token()
     url = f"https://api.github.com/repos/{full_name}"
-    payload = _request_json(url, token, timeout=timeout)
+    payload = with_retry(_request_json, url, token, timeout=timeout)
     return payload if isinstance(payload, dict) else {}

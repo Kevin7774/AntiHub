@@ -394,7 +394,7 @@ INGEST_GIT_DEPTH = int(_get("INGEST_GIT_DEPTH", "1"))
 INGEST_MAX_FILES = int(_get("INGEST_MAX_FILES", "20000"))
 OPENCLAW_BASE_URL = str(_get("OPENCLAW_BASE_URL", "")).strip()
 OPENCLAW_API_KEY = str(_get("OPENCLAW_API_KEY", "")).strip()
-OPENCLAW_TIMEOUT_SECONDS = int(_get("OPENCLAW_TIMEOUT_SECONDS", "300"))
+OPENCLAW_TIMEOUT_SECONDS = int(_get("OPENCLAW_TIMEOUT_SECONDS", "30"))
 OPENCLAW_SKILL_ENDPOINT = str(_get("OPENCLAW_SKILL_ENDPOINT", "/skills/run")).strip()
 
 _IS_PRODUCTION = str(APP_ENV or "").strip().lower() in {"prod", "production"}
@@ -418,3 +418,28 @@ def build_url_opener(url: str = "") -> urllib.request.OpenerDirector:
         if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.startswith("127."):
             return _NO_PROXY_OPENER
     return urllib.request.build_opener()
+
+
+def _should_bypass_proxy(url: str = "") -> bool:
+    """Return True when proxy should be bypassed for the given URL."""
+    if _IS_PRODUCTION:
+        return True
+    if url:
+        host = (urlparse(url).hostname or "").lower()
+        if host in {"localhost", "127.0.0.1", "0.0.0.0"} or host.startswith("127."):
+            return True
+    return False
+
+
+def build_httpx_proxy(url: str = "") -> Dict[str, Any]:
+    """Return kwargs suitable for ``httpx.Client(...)`` with correct proxy.
+
+    Returns a dict that can be unpacked into the Client constructor.
+    """
+    if _should_bypass_proxy(url):
+        return {"proxy": None}
+    proxy_cfg = get_proxy_config()
+    https_proxy = proxy_cfg.get("https_proxy") or proxy_cfg.get("http_proxy") or ""
+    if https_proxy:
+        return {"proxy": https_proxy}
+    return {}
