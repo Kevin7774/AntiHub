@@ -28,6 +28,7 @@ services:
       - ./.antihub:/app/.antihub
       - ./logs:/app/logs
       - ./certs:/app/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock
     command: >
       sh -c "python scripts/init_prod_db.py &&
       exec gunicorn -k uvicorn.workers.UvicornWorker
@@ -43,7 +44,17 @@ services:
       start_period: 30s
     networks:
       - antihub_internal
-
+  openclaw:
+    image: antihub/api:prod
+    restart: unless-stopped
+    env_file:
+      - .env.prod
+    expose:
+      - "18789"
+    networks:
+      - antihub_internal
+    command: >
+      sh -c "python -m openclaw.server --host 0.0.0.0 --port 18789"
   celery_worker:
     image: antihub/api:prod
     restart: unless-stopped
